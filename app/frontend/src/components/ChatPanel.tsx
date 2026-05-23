@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Send, Bot, User } from 'lucide-react';
+import { Send, Bot, User, FileCode, FileText, Braces } from 'lucide-react';
 import client from '@/lib/client';
 import AISettingsDialog, { getAISettings } from '@/components/AISettings';
 
@@ -10,17 +10,27 @@ interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  displayContent?: string;
+}
+
+interface GeneratedFile {
+  id: string;
+  name: string;
+  icon: React.ReactNode;
+  language: string;
+  code: string;
 }
 
 interface ChatPanelProps {
   onCodeGenerate?: () => void;
+  onCodeGenerated?: (files: GeneratedFile[], html: string) => void;
   conversationId?: string | null;
   onConversationSaved?: (id: string) => void;
   isLoggedIn?: boolean;
 }
 
 const SYSTEM_PROMPT =
-  '你是 Atoms 平台的 AI 编程助手。你可以帮助用户生成代码、解答编程问题、设计网页和应用。请用中文回复。';
+  '你是 Atoms 平台的 AI 编程助手。你可以帮助用户生成代码、解答编程问题、设计网页和应用。当用户要求你创建网页或应用时，请生成完整的 HTML、CSS 和 JavaScript 代码，使用 markdown 代码块包裹（```html、```css、```javascript）。请用中文回复。';
 
 const SUGGESTED_PROMPTS = [
   '创建一个现代化的 Landing Page',
@@ -29,8 +39,133 @@ const SUGGESTED_PROMPTS = [
   '开发一个任务管理应用',
 ];
 
+function getFileIcon(language: string): React.ReactNode {
+  switch (language) {
+    case 'html':
+      return <FileCode className="w-3.5 h-3.5 text-orange-400" />;
+    case 'css':
+      return <FileText className="w-3.5 h-3.5 text-blue-400" />;
+    case 'javascript':
+    case 'js':
+      return <Braces className="w-3.5 h-3.5 text-yellow-400" />;
+    default:
+      return <FileCode className="w-3.5 h-3.5 text-muted-foreground" />;
+  }
+}
+
+function getFileName(language: string): string {
+  switch (language) {
+    case 'html':
+      return 'index.html';
+    case 'css':
+      return 'styles.css';
+    case 'javascript':
+    case 'js':
+      return 'app.js';
+    case 'typescript':
+    case 'ts':
+      return 'app.ts';
+    case 'json':
+      return 'data.json';
+    default:
+      return 'code.txt';
+  }
+}
+
+function parseCodeBlocks(content: string): {
+  files: GeneratedFile[];
+  displayContent: string;
+  fullHtml: string;
+} {
+  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
+  const files: GeneratedFile[] = [];
+  let htmlCode = '';
+  let cssCode = '';
+  let jsCode = '';
+
+  let match;
+  let fileIndex = 0;
+
+  while ((match = codeBlockRegex.exec(content)) !== null) {
+    const language = match[1].toLowerCase() || 'text';
+    const code = match[2].trim();
+
+    const file: GeneratedFile = {
+      id: `file-${fileIndex++}`,
+      name: getFileName(language),
+      icon: getFileIcon(language),
+      language: language === 'js' ? 'javascript' : language,
+      code,
+    };
+    files.push(file);
+
+    if (language === 'html') {
+      htmlCode = code;
+    } else if (language === 'css') {
+      cssCode = code;
+    } else if (language === 'javascript' || language === 'js') {
+      jsCode = code;
+    }
+  }
+
+  // Build display content: replace code blocks with short notes
+  const displayContent = content.replace(codeBlockRegex, (_fullMatch, lang: string) => {
+    const fileName = getFileName(lang.toLowerCase() || 'text');
+    return `\n📄 ${fileName} 已生成 →\n`;
+  });
+
+  // Build full HTML for preview
+  let fullHtml = '';
+  if (files.length > 0) {
+    if (htmlCode) {
+      // If the HTML already contains <html> or <!DOCTYPE>, inject CSS/JS into it
+      if (htmlCode.includes('<head>') || htmlCode.includes('<html')) {
+        fullHtml = htmlCode;
+        if (cssCode) {
+          fullHtml = fullHtml.replace('</head>', `<style>\n${cssCode}\n</style>\n</head>`);
+        }
+        if (jsCode) {
+          fullHtml = fullHtml.replace('</body>', `<script>\n${jsCode}\n</script>\n</body>`);
+        }
+      } else {
+        // Wrap in a complete HTML document
+        fullHtml = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Preview</title>
+  ${cssCode ? `<style>\n${cssCode}\n</style>` : ''}
+</head>
+<body>
+${htmlCode}
+${jsCode ? `<script>\n${jsCode}\n</script>` : ''}
+</body>
+</html>`;
+      }
+    } else if (cssCode || jsCode) {
+      // No HTML, but has CSS/JS
+      fullHtml = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Preview</title>
+  ${cssCode ? `<style>\n${cssCode}\n</style>` : ''}
+</head>
+<body>
+${jsCode ? `<script>\n${jsCode}\n</script>` : ''}
+</body>
+</html>`;
+    }
+  }
+
+  return { files, displayContent, fullHtml };
+}
+
 export default function ChatPanel({
   onCodeGenerate,
+  onCodeGenerated,
   conversationId,
   onConversationSaved,
   isLoggedIn,
@@ -69,7 +204,13 @@ export default function ChatPanel({
       if (!isLoggedIn) return;
 
       try {
-        const messagesStr = JSON.stringify(msgs);
+        // Save with original content (not display content)
+        const saveMsgs = msgs.map((m) => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+        }));
+        const messagesStr = JSON.stringify(saveMsgs);
         if (currentConvId) {
           await client.entities.conversations.update({
             id: currentConvId,
@@ -100,6 +241,17 @@ export default function ChatPanel({
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages]);
+
+  const processAIResponse = useCallback(
+    (content: string) => {
+      const { files, displayContent, fullHtml } = parseCodeBlocks(content);
+      if (files.length > 0) {
+        onCodeGenerated?.(files, fullHtml);
+      }
+      return files.length > 0 ? displayContent : content;
+    },
+    [onCodeGenerated]
+  );
 
   const handleSend = async () => {
     if (!input.trim() || isTyping) return;
@@ -154,9 +306,11 @@ export default function ChatPanel({
           (response as { data?: { content?: string } })?.data?.content ||
           '未收到回复';
 
+        const display = processAIResponse(content);
+
         const finalMessages: Message[] = [
           ...updatedMessages,
-          { id: assistantId, role: 'assistant', content },
+          { id: assistantId, role: 'assistant', content, displayContent: display },
         ];
         setMessages(finalMessages);
         setIsTyping(false);
@@ -209,9 +363,11 @@ export default function ChatPanel({
           onComplete: (finalResult: { content?: string }) => {
             if (abortRef.current) return;
             const finalContent = finalResult?.content || accumulatedContent;
+            const display = processAIResponse(finalContent);
+
             const finalMessages: Message[] = [
               ...updatedMessages,
-              { id: assistantId, role: 'assistant', content: finalContent },
+              { id: assistantId, role: 'assistant', content: finalContent, displayContent: display },
             ];
             setMessages(finalMessages);
             setIsTyping(false);
@@ -323,7 +479,9 @@ export default function ChatPanel({
                     : 'bg-[#1a1a2e] border border-border text-foreground'
                 }`}
               >
-                <p className="whitespace-pre-wrap">{msg.content}</p>
+                <p className="whitespace-pre-wrap">
+                  {msg.displayContent || msg.content}
+                </p>
               </div>
               {msg.role === 'user' && (
                 <div className="flex-shrink-0 w-7 h-7 rounded-full bg-[#1a1a2e] border border-border flex items-center justify-center">

@@ -4,9 +4,10 @@ import { Button } from "@/components/ui/button";
 
 interface PreviewPanelProps {
   hasContent?: boolean;
+  htmlContent?: string;
 }
 
-export default function PreviewPanel({ hasContent = false }: PreviewPanelProps) {
+export default function PreviewPanel({ hasContent = false, htmlContent }: PreviewPanelProps) {
   const [viewMode, setViewMode] = useState<"desktop" | "mobile">("desktop");
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -69,14 +70,27 @@ export default function PreviewPanel({ hasContent = false }: PreviewPanelProps) 
 
       {/* Preview Content */}
       <div className="flex-1 flex items-center justify-center p-4 overflow-hidden">
-        {hasContent ? (
+        {hasContent && htmlContent ? (
+          <div
+            key={refreshKey}
+            className={`h-full rounded-lg border border-border overflow-hidden fade-in-up ${
+              viewMode === "mobile" ? "w-[320px]" : "w-full"
+            }`}
+          >
+            <iframe
+              srcDoc={htmlContent}
+              className="w-full h-full border-0 bg-white"
+              title="Preview"
+              sandbox="allow-scripts allow-same-origin"
+            />
+          </div>
+        ) : hasContent ? (
           <div
             key={refreshKey}
             className={`h-full bg-gradient-to-br from-[#0f0f23] via-[#1a1a2e] to-[#16213e] rounded-lg border border-border overflow-hidden fade-in-up ${
               viewMode === "mobile" ? "w-[320px]" : "w-full"
             }`}
           >
-            {/* Rendered preview content would go here */}
             <div className="h-full overflow-auto flex items-center justify-center">
               <p className="text-xs text-muted-foreground">渲染中...</p>
             </div>

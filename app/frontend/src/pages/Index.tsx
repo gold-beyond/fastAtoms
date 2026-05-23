@@ -27,6 +27,14 @@ interface Project {
   created_at?: string;
 }
 
+interface GeneratedFile {
+  id: string;
+  name: string;
+  icon: React.ReactNode;
+  language: string;
+  code: string;
+}
+
 export default function IndexPage() {
   const { user, loading, login, logout } = useAuth();
   const [publishOpen, setPublishOpen] = useState(false);
@@ -34,6 +42,8 @@ export default function IndexPage() {
   const [sidebarVisible, setSidebarVisible] = useState(false);
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [generatedFiles, setGeneratedFiles] = useState<GeneratedFile[]>([]);
+  const [previewHtml, setPreviewHtml] = useState<string>('');
 
   const handleSelectProject = useCallback((project: Project) => {
     setCurrentProject(project);
@@ -41,6 +51,11 @@ export default function IndexPage() {
 
   const handleConversationSaved = useCallback((id: string) => {
     setConversationId(id);
+  }, []);
+
+  const handleCodeGenerated = useCallback((files: GeneratedFile[], html: string) => {
+    setGeneratedFiles(files);
+    setPreviewHtml(html);
   }, []);
 
   const isLoggedIn = !!user;
@@ -159,6 +174,7 @@ export default function IndexPage() {
             <ChatPanel
               conversationId={conversationId}
               onConversationSaved={handleConversationSaved}
+              onCodeGenerated={handleCodeGenerated}
               isLoggedIn={isLoggedIn}
             />
           </div>
@@ -168,12 +184,15 @@ export default function IndexPage() {
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Code Editor - Top Right */}
           <div className="flex-1 min-h-0">
-            <CodeEditor />
+            <CodeEditor files={generatedFiles} />
           </div>
 
           {/* Preview Panel - Bottom Right */}
           <div className="h-[45%] min-h-[200px]">
-            <PreviewPanel />
+            <PreviewPanel
+              hasContent={!!previewHtml}
+              htmlContent={previewHtml}
+            />
           </div>
         </div>
       </div>
