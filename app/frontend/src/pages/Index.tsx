@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -12,7 +12,10 @@ import CodeEditor from '@/components/CodeEditor';
 import PreviewPanel from '@/components/PreviewPanel';
 import PublishDialog from '@/components/PublishDialog';
 import ProjectSidebar from '@/components/ProjectSidebar';
+import ConversationSidebar, { ConversationSidebarToggle } from '@/components/ConversationSidebar';
 import { useAuth } from '@/hooks/useAuth';
+import { ConversationItem, getLocalConversations, saveLocalConversations } from '@/lib/conversationUtils';
+import client from '@/lib/client';
 
 const LOGO_URL =
   'https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-22/pcdp5pyaagrq/atoms-logo-glow.png';
@@ -44,6 +47,64 @@ export default function IndexPage() {
   const [generatedFiles, setGeneratedFiles] = useState<GeneratedFile[]>([]);
   const [previewHtml, setPreviewHtml] = useState<string>('');
 
+  // Conversation state (lifted from ChatPanel)
+  const [conversations, setConversations] = useState<ConversationItem[]>([]);
+  const [currentConvId, setCurrentConvId] = useState<string | null>(null);
+  const [convSidebarCollapsed, setConvSidebarCollapsed] = useState(false);
+
+  const isLoggedIn = !!user;
+
+  const loadConversationList = useCallback(async () => {
+    if (isLoggedIn) {
+      try {
+        const response = await client.entities.conversations.list();
+        const data = response?.data;
+        if (Array.isArray(data)) {
+          const items: ConversationItem[] = data.map((item: Record<string, unknown>) => ({
+            id: item.id as string,
+            title: (item.title as string) || '新对话',
+            created_at: item.created_at as string | undefined,
+            messages: item.messages as string | undefined,
+          }));
+          // Sort by created_at descending
+          items.sort((a, b) => {
+            if (!a.created_at || !b.created_at) return 0;
+            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+          });
+          setConversations(items);
+        }
+      } catch {
+        // Silently handle errors
+      }
+    } else {
+      setConversations(getLocalConversations());
+    }
+  }, [isLoggedIn]);
+
+  // Load conversation list on mount and when login state changes
+  useEffect(() => {
+    loadConversationList();
+  }, [loadConversationList]);
+
+  const handleSelectConversation = useCallback((conv: ConversationItem) => {
+    setCurrentConvId(conv.id);
+  }, []);
+
+  const handleNewConversation = useCallback(() => {
+    setCurrentConvId(null);
+  }, []);
+
+  const handleConversationSaved = useCallback(
+    (_id: string) => {
+      loadConversationList();
+    },
+    [loadConversationList]
+  );
+
+  const handleCurrentConvIdChange = useCallback((id: string | null) => {
+    setCurrentConvId(id);
+  }, []);
+
   const handleSelectProject = useCallback((project: Project) => {
     setCurrentProject(project);
   }, []);
@@ -55,8 +116,6 @@ export default function IndexPage() {
     setPreviewHtml(html);
     setRightPanelTab('editor');
   }, []);
-
-  const isLoggedIn = !!user;
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-[#0a0a1a]">
@@ -155,7 +214,7 @@ export default function IndexPage() {
       </header>
 
       {/* Main Content */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden relative">
         {/* Project Sidebar */}
         {isLoggedIn && (
           <ProjectSidebar
@@ -166,12 +225,30 @@ export default function IndexPage() {
           />
         )}
 
-        {/* Chat Panel - Left */}
+        {/* Conversation Sidebar - Always present */}
+        <ConversationSidebar
+          conversations={conversations}
+          currentConvId={currentConvId}
+          onSelectConversation={handleSelectConversation}
+          onNewConversation={handleNewConversation}
+          collapsed={convSidebarCollapsed}
+          onToggleCollapse={() => setConvSidebarCollapsed(true)}
+        />
+
+        {/* Expand toggle when sidebar is collapsed */}
+        {convSidebarCollapsed && (
+          <ConversationSidebarToggle onClick={() => setConvSidebarCollapsed(false)} />
+        )}
+
+        {/* Chat Panel */}
         {!chatCollapsed && (
           <div className="w-[35%] min-w-[280px] max-w-[420px]">
             <ChatPanel
               onCodeGenerated={handleCodeGenerated}
               isLoggedIn={isLoggedIn}
+              currentConvId={currentConvId}
+              onCurrentConvIdChange={handleCurrentConvIdChange}
+              onConversationSaved={handleConversationSaved}
             />
           </div>
         )}

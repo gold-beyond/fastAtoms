@@ -2,9 +2,10 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Send, Bot, User, FileCode, FileText, Braces, History, Plus, X } from 'lucide-react';
+import { Send, Bot, User, FileCode, FileText, Braces } from 'lucide-react';
 import client from '@/lib/client';
 import AISettingsDialog, { getAISettings } from '@/components/AISettings';
+import { getLocalConversations, saveLocalConversations } from '@/lib/conversationUtils';
 
 interface Message {
   id: string;
@@ -21,21 +22,14 @@ interface GeneratedFile {
   code: string;
 }
 
-interface ConversationItem {
-  id: string;
-  title: string;
-  created_at?: string;
-  messages?: string;
-}
-
 interface ChatPanelProps {
   onCodeGenerate?: () => void;
   onCodeGenerated?: (files: GeneratedFile[], html: string) => void;
   onConversationSaved?: (id: string) => void;
   isLoggedIn?: boolean;
+  currentConvId: string | null;
+  onCurrentConvIdChange?: (id: string | null) => void;
 }
-
-const LOCAL_STORAGE_KEY = 'atoms_local_conversations';
 
 const SYSTEM_PROMPT =
   '你是 Atoms 平台的 AI 编程助手。你可以帮助用户生成代码、解答编程问题、设计网页和应用。当用户要求你创建网页或应用时，请生成完整的 HTML、CSS 和 JavaScript 代码，使用 markdown 代码块包裹（```html、```css、```javascript）。请用中文回复。';
@@ -182,118 +176,59 @@ function getDisplayContent(msg: Message): string {
   });
 }
 
-function formatRelativeTime(dateStr?: string): string {
-  if (!dateStr) return '';
-  const date = new Date(dateStr);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMin = Math.floor(diffMs / 60000);
-  if (diffMin < 1) return '刚刚';
-  if (diffMin < 60) return `${diffMin} 分钟前`;
-  const diffHours = Math.floor(diffMin / 60);
-  if (diffHours < 24) return `${diffHours} 小时前`;
-  const diffDays = Math.floor(diffHours / 24);
-  if (diffDays < 30) return `${diffDays} 天前`;
-  return date.toLocaleDateString('zh-CN');
-}
-
-function getLocalConversations(): ConversationItem[] {
-  try {
-    const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (stored) return JSON.parse(stored);
-  } catch {
-    // ignore
-  }
-  return [];
-}
-
-function saveLocalConversations(conversations: ConversationItem[]) {
-  try {
-    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(conversations));
-  } catch {
-    // ignore
-  }
-}
-
 export default function ChatPanel({
   onCodeGenerate,
   onCodeGenerated,
   onConversationSaved,
   isLoggedIn,
+  currentConvId,
+  onCurrentConvIdChange,
 }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-  const [currentConvId, setCurrentConvId] = useState<string | null>(null);
-  const [showHistory, setShowHistory] = useState(false);
-  const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef(false);
+  const prevConvIdRef = useRef<string | null>(null);
 
-  // Load conversation list on mount or when login state changes
+  // Load conversation when currentConvId changes externally
   useEffect(() => {
-    loadConversationList();
-  }, [isLoggedIn]);
+    if (currentConvId === prevConvIdRef.current) return;
+    prevConvIdRef.current = currentConvId;
 
-  const loadConversationList = async () => {
-    if (isLoggedIn) {
-      try {
-        const response = await client.entities.conversations.list();
-        const data = response?.data;
-        if (Array.isArray(data)) {
-          const items: ConversationItem[] = data.map((item: Record<string, unknown>) => ({
-            id: item.id as string,
-            title: (item.title as string) || '新对话',
-            created_at: item.created_at as string | undefined,
-            messages: item.messages as string | undefined,
-          }));
-          // Sort by created_at descending
-          items.sort((a, b) => {
-            if (!a.created_at || !b.created_at) return 0;
-            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-          });
-          setConversations(items);
-        }
-      } catch {
-        // Silently handle errors
-      }
-    } else {
-      setConversations(getLocalConversations());
+    if (currentConvId === null) {
+      setMessages([]);
+      return;
     }
-  };
 
-  const loadConversation = async (conv: ConversationItem) => {
-    if (isLoggedIn) {
-      try {
-        const response = await client.entities.conversations.get({ id: conv.id });
-        if (response?.data?.messages) {
-          const parsed = JSON.parse(response.data.messages as string);
-          setMessages(parsed);
-          setCurrentConvId(conv.id);
-        }
-      } catch {
-        // Fall back
-      }
-    } else {
-      // Load from local storage
-      if (conv.messages) {
+    const loadConversation = async () => {
+      if (isLoggedIn) {
         try {
-          const parsed = JSON.parse(conv.messages);
-          setMessages(parsed);
-          setCurrentConvId(conv.id);
+          const response = await client.entities.conversations.get({ id: currentConvId });
+          if (response?.data?.messages) {
+            const parsed = JSON.parse(response.data.messages as string);
+            setMessages(parsed);
+          }
         } catch {
-          // ignore
+          // Fall back silently
+        }
+      } else {
+        // Load from local storage
+        const localConvs = getLocalConversations();
+        const conv = localConvs.find((c) => c.id === currentConvId);
+        if (conv?.messages) {
+          try {
+            const parsed = JSON.parse(conv.messages);
+            setMessages(parsed);
+          } catch {
+            // ignore
+          }
         }
       }
-    }
-    setShowHistory(false);
-  };
+    };
 
-  const handleNewConversation = () => {
-    setMessages([]);
-    setCurrentConvId(null);
-    setShowHistory(false);
-  };
+    loadConversation();
+  }, [currentConvId, isLoggedIn]);
 
   const saveConversation = useCallback(
     async (msgs: Message[]) => {
@@ -314,18 +249,18 @@ export default function ChatPanel({
               id: currentConvId,
               data: { title, messages: messagesStr },
             });
+            onConversationSaved?.(currentConvId);
           } else {
             const response = await client.entities.conversations.create({
               data: { title, messages: messagesStr },
             });
             if (response?.data?.id) {
               const newId = response.data.id as string;
-              setCurrentConvId(newId);
+              prevConvIdRef.current = newId;
+              onCurrentConvIdChange?.(newId);
               onConversationSaved?.(newId);
             }
           }
-          // Refresh conversation list
-          loadConversationList();
         } catch {
           // Silently handle save errors
         }
@@ -338,6 +273,8 @@ export default function ChatPanel({
             localConvs[idx].title = title;
             localConvs[idx].messages = messagesStr;
           }
+          saveLocalConversations(localConvs);
+          onConversationSaved?.(currentConvId);
         } else {
           const newId = `local-${Date.now()}`;
           localConvs.unshift({
@@ -346,13 +283,14 @@ export default function ChatPanel({
             messages: messagesStr,
             created_at: new Date().toISOString(),
           });
-          setCurrentConvId(newId);
+          saveLocalConversations(localConvs);
+          prevConvIdRef.current = newId;
+          onCurrentConvIdChange?.(newId);
+          onConversationSaved?.(newId);
         }
-        saveLocalConversations(localConvs);
-        setConversations(localConvs);
       }
     },
-    [isLoggedIn, currentConvId, onConversationSaved]
+    [isLoggedIn, currentConvId, onConversationSaved, onCurrentConvIdChange]
   );
 
   useEffect(() => {
@@ -546,77 +484,9 @@ export default function ChatPanel({
           AI 助手
         </span>
         <div className="ml-auto flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="w-7 h-7 text-muted-foreground hover:text-foreground"
-            onClick={() => setShowHistory(!showHistory)}
-            title="对话历史"
-          >
-            <History className="w-4 h-4" />
-          </Button>
           <AISettingsDialog />
         </div>
       </div>
-
-      {/* Conversation History Overlay */}
-      {showHistory && (
-        <div className="absolute top-[49px] left-0 right-0 bottom-0 z-20 bg-[#0f0f23]/95 backdrop-blur-sm flex flex-col">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-            <span className="text-sm font-medium text-foreground">对话历史</span>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 text-xs text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/10"
-                onClick={handleNewConversation}
-              >
-                <Plus className="w-3.5 h-3.5 mr-1" />
-                新对话
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="w-7 h-7 text-muted-foreground hover:text-foreground"
-                onClick={() => setShowHistory(false)}
-              >
-                <X className="w-4 h-4" />
-              </Button>
-            </div>
-          </div>
-          <ScrollArea className="flex-1 p-2">
-            {conversations.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                <History className="w-8 h-8 mb-3 opacity-50" />
-                <p className="text-sm">暂无对话记录</p>
-              </div>
-            ) : (
-              <div className="space-y-1">
-                {conversations.map((conv) => (
-                  <button
-                    key={conv.id}
-                    onClick={() => loadConversation(conv)}
-                    className={`w-full text-left px-3 py-2.5 rounded-lg transition-colors ${
-                      currentConvId === conv.id
-                        ? 'bg-indigo-500/15 border border-indigo-500/30'
-                        : 'hover:bg-[#1a1a2e] border border-transparent'
-                    }`}
-                  >
-                    <p className="text-sm text-foreground truncate">
-                      {conv.title || '新对话'}
-                    </p>
-                    {conv.created_at && (
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        {formatRelativeTime(conv.created_at)}
-                      </p>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
-          </ScrollArea>
-        </div>
-      )}
 
       {/* Messages */}
       <ScrollArea className="flex-1 p-4" ref={scrollRef}>
