@@ -22,19 +22,11 @@ interface ChatPanelProps {
 const SYSTEM_PROMPT =
   '你是 Atoms 平台的 AI 编程助手。你可以帮助用户生成代码、解答编程问题、设计网页和应用。请用中文回复。';
 
-const DEMO_MESSAGES: Message[] = [
-  {
-    id: '1',
-    role: 'user',
-    content:
-      '帮我创建一个现代化的landing page，需要有英雄区域、特性展示和底部联系表单',
-  },
-  {
-    id: '2',
-    role: 'assistant',
-    content:
-      '好的！我来为你创建一个现代化的 Landing Page。我将使用渐变背景、流畅动画和响应式布局来构建。包含以下部分：\n\n✨ 英雄区域 - 大标题 + 渐变背景 + CTA按钮\n📋 特性展示 - 三列卡片布局\n📬 联系表单 - 简洁的输入框设计\n\n正在为你生成代码...',
-  },
+const SUGGESTED_PROMPTS = [
+  '创建一个现代化的 Landing Page',
+  '设计一个电商产品展示页',
+  '构建一个数据可视化仪表盘',
+  '开发一个任务管理应用',
 ];
 
 export default function ChatPanel({
@@ -43,7 +35,7 @@ export default function ChatPanel({
   onConversationSaved,
   isLoggedIn,
 }: ChatPanelProps) {
-  const [messages, setMessages] = useState<Message[]>(DEMO_MESSAGES);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [currentConvId, setCurrentConvId] = useState<string | null>(
@@ -286,6 +278,32 @@ export default function ChatPanel({
       {/* Messages */}
       <ScrollArea className="flex-1 p-4" ref={scrollRef}>
         <div className="space-y-4">
+          {/* Empty state / Welcome */}
+          {messages.length === 0 && !isTyping && (
+            <div className="flex flex-col items-center justify-center h-full min-h-[300px] py-12 px-4">
+              <div className="w-12 h-12 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center mb-6">
+                <Bot className="w-6 h-6 text-white" />
+              </div>
+              <h2 className="text-xl font-semibold text-foreground mb-2">
+                你想构建什么？
+              </h2>
+              <p className="text-sm text-muted-foreground mb-8 text-center">
+                描述你的想法，我来帮你实现
+              </p>
+              <div className="grid grid-cols-1 gap-2 w-full max-w-sm">
+                {SUGGESTED_PROMPTS.map((prompt) => (
+                  <button
+                    key={prompt}
+                    onClick={() => setInput(prompt)}
+                    className="text-left px-4 py-3 rounded-lg border border-border bg-[#1a1a2e] text-sm text-foreground hover:border-indigo-500/50 hover:bg-indigo-500/5 transition-colors"
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {messages.map((msg) => (
             <div
               key={msg.id}
