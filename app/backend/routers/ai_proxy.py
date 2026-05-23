@@ -1,12 +1,10 @@
 """AI Proxy Router - proxies chat requests to external AI providers."""
 import logging
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from dependencies.auth import get_current_user
-from schemas.auth import UserResponse
 from services.ai_proxy import proxy_chat
 
 logger = logging.getLogger(__name__)
@@ -22,8 +20,8 @@ class ChatMessage(BaseModel):
 class ChatProxyRequest(BaseModel):
     messages: List[ChatMessage]
     model: str
-    api_key: str
-    provider: str  # 'openai' | 'anthropic' | 'deepseek'
+    api_key: Optional[str] = None
+    provider: Optional[str] = None
 
 
 class ChatProxyResponse(BaseModel):
@@ -33,7 +31,6 @@ class ChatProxyResponse(BaseModel):
 @router.post("/proxy", response_model=ChatProxyResponse)
 async def chat_proxy(
     data: ChatProxyRequest,
-    current_user: UserResponse = Depends(get_current_user),
 ):
     """Proxy a chat completion request to an external AI provider."""
     try:
@@ -48,5 +45,5 @@ async def chat_proxy(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Chat proxy error: {e}")
+        logger.error("Chat proxy error: %s", e)
         raise HTTPException(status_code=502, detail=f"AI provider error: {str(e)}")

@@ -1,4 +1,4 @@
-import axios, { AxiosInstance } from 'axios';
+import axios, { AxiosError, AxiosInstance } from 'axios';
 import { getAPIBaseURL } from './config';
 
 class RPApi {
@@ -24,12 +24,15 @@ class RPApi {
       );
       return response.data;
     } catch (error) {
-      if (error.response?.status === 401) {
-        return null;
+      if (error instanceof AxiosError) {
+        if (error.response?.status === 401) {
+          return null;
+        }
+        throw new Error(
+          error.response?.data?.detail || 'Failed to get user info'
+        );
       }
-      throw new Error(
-        error.response?.data?.detail || 'Failed to get user info'
-      );
+      throw new Error('Failed to get user info');
     }
   }
 
@@ -38,13 +41,14 @@ class RPApi {
       const response = await this.client.get(
         `${this.getBaseURL()}/api/v1/auth/login`
       );
-      // The backend will redirect to OIDC provider
-      // SSO will work via cookies automatically
       window.location.href = response.data.redirect_url;
     } catch (error) {
-      throw new Error(
-        error.response?.data?.detail || 'Failed to initiate login'
-      );
+      if (error instanceof AxiosError) {
+        throw new Error(
+          error.response?.data?.detail || 'Failed to initiate login'
+        );
+      }
+      throw new Error('Failed to initiate login');
     }
   }
 
@@ -53,10 +57,12 @@ class RPApi {
       const response = await this.client.get(
         `${this.getBaseURL()}/api/v1/auth/logout`
       );
-      // The backend will redirect to OIDC provider logout
       window.location.href = response.data.redirect_url;
     } catch (error) {
-      throw new Error(error.response?.data?.detail || 'Failed to logout');
+      if (error instanceof AxiosError) {
+        throw new Error(error.response?.data?.detail || 'Failed to logout');
+      }
+      throw new Error('Failed to logout');
     }
   }
 }

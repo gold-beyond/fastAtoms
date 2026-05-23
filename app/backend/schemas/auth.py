@@ -25,3 +25,15 @@ class TokenExchangeResponse(BaseModel):
     """Response body for issued application token."""
 
     token: str
+
+
+class SimpleLoginRequest(BaseModel):
+    name: str
+    password: str
+
+
+class SimpleLoginResponse(BaseModel):
+    token: str
+    expires_at: str
+    token_type: str
+    user: UserResponse

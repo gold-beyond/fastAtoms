@@ -3,9 +3,8 @@ import base64
 import hashlib
 import os
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 
-secret_key = "Mgx@FunctionSea"
 key_prefix = "mgxkey-"
 
 
@@ -15,19 +14,29 @@ def _derive_fernet_key(key_material: str) -> bytes:
     return base64.urlsafe_b64encode(digest)
 
 
+def _get_mask_key() -> str:
+    """Get encryption key from environment variable only."""
+    key = os.environ.get("MASK_KEY")
+    if not key:
+        raise ValueError("MASK_KEY environment variable is not set. Encryption operations are unavailable.")
+    return key
+
+
 def _get_fernet(key_str: str) -> Fernet:
     key = _derive_fernet_key(key_str)
     return Fernet(key)
 
 
 def encrypt_text(plain: str) -> str:
-    pwd = os.environ.get("MASK_KEY", secret_key)
+    pwd = _get_mask_key()
     f = _get_fernet(pwd)
     return key_prefix + f.encrypt(plain.encode("utf-8")).decode("utf-8")
 
 
 def decrypt_text(token: str) -> str:
-    pwd = os.environ.get("MASK_KEY", secret_key)
+    pwd = _get_mask_key()
     f = _get_fernet(pwd)
+    if not token.startswith(key_prefix):
+        raise ValueError("Invalid encrypted token: missing expected prefix")
     token = token.removeprefix(key_prefix)
     return f.decrypt(token.encode("utf-8")).decode("utf-8")

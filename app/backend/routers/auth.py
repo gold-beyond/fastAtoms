@@ -22,6 +22,8 @@ from fastapi.responses import RedirectResponse
 from models.auth import User
 from schemas.auth import (
     PlatformTokenExchangeRequest,
+    SimpleLoginRequest,
+    SimpleLoginResponse,
     TokenExchangeResponse,
     UserResponse,
 )
@@ -312,6 +314,44 @@ async def exchange_platform_token(
 async def get_current_user_info(current_user: UserResponse = Depends(get_current_user)):
     """Get current user info."""
     return current_user
+
+
+@router.post("/login-simple", response_model=SimpleLoginResponse)
+async def login_simple(
+    request: SimpleLoginRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    from core.password import DEFAULT_ACCOUNT_HASHES, verify_password
+
+    name = request.name.strip()
+    password = request.password.strip()
+    if not name or len(name) > 50:
+        raise HTTPException(status_code=400, detail="Invalid name")
+
+    expected_hash = DEFAULT_ACCOUNT_HASHES.get(name)
+    if not expected_hash or not verify_password(password, expected_hash):
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+
+    auth_service = AuthService(db)
+    user = await auth_service.get_or_create_user(
+        platform_sub=f"simple:{name}",
+        email=f"{name}@atoms.local",
+        name=name,
+    )
+
+    token, expires_at, _ = await auth_service.issue_app_token(user)
+    return SimpleLoginResponse(
+        token=token,
+        expires_at=expires_at.isoformat(),
+        token_type="Bearer",
+        user=UserResponse(
+            id=user.id,
+            email=user.email,
+            name=user.name,
+            role=user.role,
+            last_login=user.last_login,
+        ),
+    )
 
 
 @router.get("/logout")

@@ -2,9 +2,9 @@ import json
 import logging
 from typing import List, Optional
 
-from datetime import datetime, date
+from datetime import datetime
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,10 +23,10 @@ router = APIRouter(prefix="/api/v1/entities/projects", tags=["projects"])
 class ProjectsData(BaseModel):
     """Entity data schema (for create/update)"""
     name: str
-    code_html: str = None
-    code_css: str = None
-    code_js: str = None
-    published_url: str = None
+    code_html: Optional[str] = None
+    code_css: Optional[str] = None
+    code_js: Optional[str] = None
+    published_url: Optional[str] = None
 
 
 class ProjectsUpdateData(BaseModel):
@@ -130,14 +130,14 @@ async def query_projectss_all(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(20, ge=1, le=2000, description="Max number of records to return"),
     fields: str = Query(None, description="Comma-separated list of fields to return"),
+    current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Query projectss with filtering, sorting, and pagination without user limitation
-    logger.debug(f"Querying projectss: query={query}, sort={sort}, skip={skip}, limit={limit}, fields={fields}")
+    # Query projectss with filtering, sorting, and pagination (authenticated, user scoped)
+    logger.debug("Querying projectss all: query=%s, sort=%s, skip=%d, limit=%d, fields=%s", query, sort, skip, limit, fields)
 
     service = ProjectsService(db)
     try:
-        # Parse query JSON if provided
         query_dict = None
         if query:
             try:
@@ -149,14 +149,15 @@ async def query_projectss_all(
             skip=skip,
             limit=limit,
             query_dict=query_dict,
-            sort=sort
+            sort=sort,
+            user_id=str(current_user.id),
         )
-        logger.debug(f"Found {result['total']} projectss")
+        logger.debug("Found %d projectss", result['total'])
         return result
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error querying projectss: {str(e)}", exc_info=True)
+        logger.error("Error querying projectss: %s", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 

@@ -1,15 +1,44 @@
 """AI Proxy Service - proxies chat requests to external AI providers."""
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+
+from core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_api_key(api_key: Optional[str], provider: Optional[str]) -> str:
+    """Resolve API key from request or environment variables."""
+    if api_key:
+        return api_key
+    if provider == "deepseek":
+        return getattr(settings, "deepseek_api_key", "")
+    elif provider == "openai":
+        return getattr(settings, "openai_api_key", "")
+    elif provider == "anthropic":
+        return getattr(settings, "anthropic_api_key", "")
+    return ""
+
+
+def _resolve_provider(provider: Optional[str], model: str) -> str:
+    """Resolve provider from request or infer from model name."""
+    if provider:
+        return provider
+    model_lower = model.lower()
+    if "deepseek" in model_lower:
+        return "deepseek"
+    elif "gpt" in model_lower or "o1" in model_lower or "o3" in model_lower:
+        return "openai"
+    elif "claude" in model_lower:
+        return "anthropic"
+    return "deepseek"
 
 
 async def proxy_chat(
     messages: List[Dict[str, str]],
     model: str,
-    api_key: str,
-    provider: str,
+    api_key: Optional[str] = None,
+    provider: Optional[str] = None,
 ) -> str:
     """
     Proxy a chat completion request to an external AI provider.
@@ -17,16 +46,21 @@ async def proxy_chat(
     Args:
         messages: List of message dicts with 'role' and 'content' keys.
         model: The model identifier (e.g., 'gpt-4o', 'claude-sonnet-4-20250514').
-        api_key: The user's API key for the provider.
-        provider: One of 'openai', 'anthropic', 'deepseek'.
+        api_key: The user's API key for the provider (optional, falls back to env).
+        provider: One of 'openai', 'anthropic', 'deepseek' (optional, inferred from model).
 
     Returns:
         The assistant's response content as a string.
     """
+    provider = _resolve_provider(provider, model)
+    resolved_api_key = _resolve_api_key(api_key, provider)
+    if not resolved_api_key:
+        raise ValueError(f"No API key configured for provider '{provider}'. Set {provider.upper()}_API_KEY environment variable.")
+
     if provider in ("openai", "deepseek"):
-        return await _call_openai_compatible(messages, model, api_key, provider)
+        return await _call_openai_compatible(messages, model, resolved_api_key, provider)
     elif provider == "anthropic":
-        return await _call_anthropic(messages, model, api_key)
+        return await _call_anthropic(messages, model, resolved_api_key)
     else:
         raise ValueError(f"Unsupported provider: {provider}")
 

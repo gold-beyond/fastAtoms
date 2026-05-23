@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -14,8 +15,8 @@ import PublishDialog from '@/components/PublishDialog';
 import ProjectSidebar from '@/components/ProjectSidebar';
 import ConversationSidebar, { ConversationSidebarToggle } from '@/components/ConversationSidebar';
 import { useAuth } from '@/hooks/useAuth';
-import { ConversationItem, getLocalConversations, saveLocalConversations } from '@/lib/conversationUtils';
-import client from '@/lib/client';
+import { api } from '@/lib/simpleApi';
+import { ConversationItem, getLocalConversations, saveLocalConversations, deleteLocalConversation, renameLocalConversation } from '@/lib/conversationUtils';
 
 const LOGO_URL =
   'https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-22/pcdp5pyaagrq/atoms-logo-glow.png';
@@ -39,7 +40,8 @@ interface GeneratedFile {
 }
 
 export default function IndexPage() {
-  const { user, loading, login, logout } = useAuth();
+  const { user, loading, logout } = useAuth();
+  const navigate = useNavigate();
   const [publishOpen, setPublishOpen] = useState(false);
   const [chatCollapsed, setChatCollapsed] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(false);
@@ -54,19 +56,30 @@ export default function IndexPage() {
 
   const isLoggedIn = !!user;
 
+  useEffect(() => {
+    if (!loading && !user) {
+      navigate('/login', { replace: true });
+    }
+  }, [loading, user, navigate]);
+
   const loadConversationList = useCallback(async () => {
     if (isLoggedIn) {
       try {
-        const response = await client.entities.conversations.list();
-        const data = response?.data;
-        if (Array.isArray(data)) {
-          const items: ConversationItem[] = data.map((item: Record<string, unknown>) => ({
-            id: item.id as string,
-            title: (item.title as string) || '新对话',
-            created_at: item.created_at as string | undefined,
-            messages: item.messages as string | undefined,
-          }));
-          // Sort by created_at descending
+        const data = await api.get<any>('/api/v1/entities/conversations');
+        if (data?.items && Array.isArray(data.items)) {
+          const seen = new Set<string>();
+          const items: ConversationItem[] = [];
+          for (const item of data.items) {
+            const id = String(item.id);
+            if (seen.has(id)) continue;
+            seen.add(id);
+            items.push({
+              id,
+              title: (item.title as string) || '新对话',
+              created_at: item.created_at as string | undefined,
+              messages: item.messages as string | undefined,
+            });
+          }
           items.sort((a, b) => {
             if (!a.created_at || !b.created_at) return 0;
             return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
@@ -77,21 +90,38 @@ export default function IndexPage() {
         // Silently handle errors
       }
     } else {
-      setConversations(getLocalConversations());
+      const raw = getLocalConversations();
+      const seen = new Set<string>();
+      const deduped = raw.filter((c) => {
+        if (seen.has(c.id)) return false;
+        seen.add(c.id);
+        return true;
+      });
+      if (deduped.length !== raw.length) {
+        saveLocalConversations(deduped);
+      }
+      setConversations(deduped);
     }
   }, [isLoggedIn]);
 
-  // Load conversation list on mount and when login state changes
+  // Load conversation list only after auth has settled
   useEffect(() => {
+    if (loading) return;
     loadConversationList();
-  }, [loadConversationList]);
+  }, [loadConversationList, loading]);
+
+
 
   const handleSelectConversation = useCallback((conv: ConversationItem) => {
     setCurrentConvId(conv.id);
+    setGeneratedFiles([]);
+    setPreviewHtml('');
   }, []);
 
   const handleNewConversation = useCallback(() => {
     setCurrentConvId(null);
+    setGeneratedFiles([]);
+    setPreviewHtml('');
   }, []);
 
   const handleConversationSaved = useCallback(
@@ -109,12 +139,45 @@ export default function IndexPage() {
     setCurrentProject(project);
   }, []);
 
-  const [rightPanelTab, setRightPanelTab] = useState<'editor' | 'preview'>('editor');
+  const handleDeleteConversation = useCallback(
+    async (conv: ConversationItem) => {
+      if (isLoggedIn) {
+        try {
+          await api.del(`/api/v1/entities/conversations/${conv.id}`);
+        } catch {}
+      } else {
+        deleteLocalConversation(conv.id);
+      }
+      if (currentConvId === conv.id) {
+        setCurrentConvId(null);
+        setGeneratedFiles([]);
+        setPreviewHtml('');
+      }
+      await loadConversationList();
+    },
+    [isLoggedIn, currentConvId, loadConversationList]
+  );
+
+  const handleRenameConversation = useCallback(
+    async (conv: ConversationItem, newTitle: string) => {
+      if (isLoggedIn) {
+        try {
+          await api.put(`/api/v1/entities/conversations/${conv.id}`, { title: newTitle });
+        } catch {}
+      } else {
+        renameLocalConversation(conv.id, newTitle);
+      }
+      await loadConversationList();
+    },
+    [isLoggedIn, loadConversationList]
+  );
+
+  const [rightPanelTab, setRightPanelTab] = useState<'preview' | 'editor'>('preview');
 
   const handleCodeGenerated = useCallback((files: GeneratedFile[], html: string) => {
     setGeneratedFiles(files);
     setPreviewHtml(html);
-    setRightPanelTab('editor');
+    setRightPanelTab('preview');
   }, []);
 
   return (
@@ -204,7 +267,7 @@ export default function IndexPage() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={login}
+              onClick={() => navigate('/login')}
               className="text-indigo-400 hover:text-indigo-300 text-xs"
             >
               登录
@@ -231,6 +294,8 @@ export default function IndexPage() {
           currentConvId={currentConvId}
           onSelectConversation={handleSelectConversation}
           onNewConversation={handleNewConversation}
+          onDeleteConversation={handleDeleteConversation}
+          onRenameConversation={handleRenameConversation}
           collapsed={convSidebarCollapsed}
           onToggleCollapse={() => setConvSidebarCollapsed(true)}
         />
@@ -247,6 +312,7 @@ export default function IndexPage() {
               onCodeGenerated={handleCodeGenerated}
               isLoggedIn={isLoggedIn}
               currentConvId={currentConvId}
+              onCodeRestored={handleCodeGenerated}
               onCurrentConvIdChange={handleCurrentConvIdChange}
               onConversationSaved={handleConversationSaved}
             />
@@ -258,16 +324,6 @@ export default function IndexPage() {
           {/* Tab Header */}
           <div className="flex items-center gap-1 px-3 py-1.5 bg-[#0f0f23] border-b border-border">
             <button
-              onClick={() => setRightPanelTab('editor')}
-              className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
-                rightPanelTab === 'editor'
-                  ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-[#1a1a2e]'
-              }`}
-            >
-              编辑器
-            </button>
-            <button
               onClick={() => setRightPanelTab('preview')}
               className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
                 rightPanelTab === 'preview'
@@ -277,17 +333,27 @@ export default function IndexPage() {
             >
               预览
             </button>
+            <button
+              onClick={() => setRightPanelTab('editor')}
+              className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                rightPanelTab === 'editor'
+                  ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-[#1a1a2e]'
+              }`}
+            >
+              编辑器
+            </button>
           </div>
 
           {/* Tab Content */}
           <div className="flex-1 min-h-0">
-            {rightPanelTab === 'editor' ? (
-              <CodeEditor files={generatedFiles} />
-            ) : (
+            {rightPanelTab === 'preview' ? (
               <PreviewPanel
                 hasContent={!!previewHtml}
                 htmlContent={previewHtml}
               />
+            ) : (
+              <CodeEditor files={generatedFiles} />
             )}
           </div>
         </div>
