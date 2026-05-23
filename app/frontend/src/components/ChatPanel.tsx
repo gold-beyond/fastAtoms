@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Send, Bot, User, FileCode, FileText, Braces } from 'lucide-react';
+import { Send, Bot, User, FileCode, FileText, Braces, Square } from 'lucide-react';
 import client from '@/lib/client';
 import AISettingsDialog, { getAISettings } from '@/components/AISettings';
 import { getLocalConversations, saveLocalConversations } from '@/lib/conversationUtils';
@@ -25,6 +25,7 @@ interface GeneratedFile {
 interface ChatPanelProps {
   onCodeGenerate?: () => void;
   onCodeGenerated?: (files: GeneratedFile[], html: string) => void;
+  onCodeRestored?: (files: GeneratedFile[], html: string) => void;
   onConversationSaved?: (id: string) => void;
   isLoggedIn?: boolean;
   currentConvId: string | null;
@@ -179,27 +180,97 @@ function getDisplayContent(msg: Message): string {
 export default function ChatPanel({
   onCodeGenerate,
   onCodeGenerated,
+  onCodeRestored,
   onConversationSaved,
   isLoggedIn,
   currentConvId,
   onCurrentConvIdChange,
 }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const prevConvIdRef = useRef<string | null>(null);
+  const currentConvIdRef = useRef(currentConvId);
+  currentConvIdRef.current = currentConvId;
+  const pendingStreamRef = useRef<{
+    convId: string;
+    assistantId: string;
+    accumulatedContent: string;
+    baseMessages: Message[];
+  } | null>(null);
+  const requestConvIdRef = useRef<string | null>(null);
+
+  const abortGeneration = () => {
+    abortRef.current = true;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsTyping(false);
+  };
 
   // Load conversation when currentConvId changes externally
   useEffect(() => {
     if (currentConvId === prevConvIdRef.current) return;
+
+    const prevId = prevConvIdRef.current;
+
+    if (prevId && messagesRef.current.length > 0) {
+      const msgs = [...messagesRef.current];
+      const pending = pendingStreamRef.current;
+      if (!pending || pending.convId !== prevId) {
+        const lastMsg = msgs[msgs.length - 1];
+        if (lastMsg?.role === 'assistant') {
+          const content = lastMsg.content || '';
+          if (content.startsWith('⏳') || content.startsWith('⚠️')) {
+            msgs.pop();
+          }
+        }
+      }
+      saveConversation(msgs, prevId);
+    }
+
     prevConvIdRef.current = currentConvId;
 
     if (currentConvId === null) {
       setMessages([]);
+      setIsTyping(false);
       return;
     }
+
+    const pending = pendingStreamRef.current;
+    if (pending && pending.convId === currentConvId) {
+      setMessages([
+        ...pending.baseMessages,
+        {
+          id: pending.assistantId,
+          role: 'assistant' as const,
+          content: pending.accumulatedContent || '⏳ 正在思考...',
+        },
+      ]);
+      setIsTyping(true);
+      return;
+    }
+
+    setIsTyping(false);
+
+    const restoreCodeFromMessages = (msgs: Message[]) => {
+      if (!onCodeRestored) return;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === 'assistant' && msgs[i].content) {
+          const { files, fullHtml } = parseCodeBlocks(msgs[i].content);
+          if (files.length > 0) {
+            onCodeRestored(files, fullHtml);
+          }
+          break;
+        }
+      }
+    };
 
     const loadConversation = async () => {
       if (isLoggedIn) {
@@ -208,6 +279,7 @@ export default function ChatPanel({
           if (response?.data?.messages) {
             const parsed = JSON.parse(response.data.messages as string);
             setMessages(parsed);
+            restoreCodeFromMessages(parsed);
           }
         } catch {
           // Fall back silently
@@ -220,6 +292,7 @@ export default function ChatPanel({
           try {
             const parsed = JSON.parse(conv.messages);
             setMessages(parsed);
+            restoreCodeFromMessages(parsed);
           } catch {
             // ignore
           }
@@ -231,8 +304,8 @@ export default function ChatPanel({
   }, [currentConvId, isLoggedIn]);
 
   const saveConversation = useCallback(
-    async (msgs: Message[]) => {
-      // Save with original content (not display content)
+    async (msgs: Message[], convIdOverride?: string, silent?: boolean) => {
+      const targetConvId = convIdOverride ?? currentConvId;
       const saveMsgs = msgs.map((m) => ({
         id: m.id,
         role: m.role,
@@ -244,12 +317,12 @@ export default function ChatPanel({
 
       if (isLoggedIn) {
         try {
-          if (currentConvId) {
+          if (targetConvId) {
             await client.entities.conversations.update({
-              id: currentConvId,
+              id: targetConvId,
               data: { title, messages: messagesStr },
             });
-            onConversationSaved?.(currentConvId);
+            if (!silent) onConversationSaved?.(targetConvId);
           } else {
             const response = await client.entities.conversations.create({
               data: { title, messages: messagesStr },
@@ -258,23 +331,22 @@ export default function ChatPanel({
               const newId = response.data.id as string;
               prevConvIdRef.current = newId;
               onCurrentConvIdChange?.(newId);
-              onConversationSaved?.(newId);
+              if (!silent) onConversationSaved?.(newId);
             }
           }
         } catch {
           // Silently handle save errors
         }
       } else {
-        // Save to localStorage
         const localConvs = getLocalConversations();
-        if (currentConvId) {
-          const idx = localConvs.findIndex((c) => c.id === currentConvId);
+        if (targetConvId) {
+          const idx = localConvs.findIndex((c) => c.id === targetConvId);
           if (idx >= 0) {
             localConvs[idx].title = title;
             localConvs[idx].messages = messagesStr;
           }
           saveLocalConversations(localConvs);
-          onConversationSaved?.(currentConvId);
+          if (!silent) onConversationSaved?.(targetConvId);
         } else {
           const newId = `local-${Date.now()}`;
           localConvs.unshift({
@@ -286,7 +358,7 @@ export default function ChatPanel({
           saveLocalConversations(localConvs);
           prevConvIdRef.current = newId;
           onCurrentConvIdChange?.(newId);
-          onConversationSaved?.(newId);
+          if (!silent) onConversationSaved?.(newId);
         }
       }
     },
@@ -310,8 +382,31 @@ export default function ChatPanel({
     [onCodeGenerated]
   );
 
+  const handleStop = () => {
+    if (requestConvIdRef.current !== currentConvIdRef.current) return;
+    abortGeneration();
+    setMessages((prev) => {
+      const updated = [...prev];
+      const lastMsg = updated[updated.length - 1];
+      if (lastMsg?.role === 'assistant') {
+        const content = lastMsg.content || '';
+        if (content.startsWith('⏳') || content.startsWith('⚠️')) {
+          updated.pop();
+        } else {
+          updated[updated.length - 1] = {
+            ...lastMsg,
+            content: content || '(已停止生成)',
+            displayContent: '(已停止生成)',
+          };
+        }
+      }
+      saveConversation(updated);
+      return updated;
+    });
+  };
+
   const handleSend = async () => {
-    if (!input.trim() || isTyping) return;
+    if (!input.trim() || isTyping || pendingStreamRef.current) return;
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -325,10 +420,18 @@ export default function ChatPanel({
     setIsTyping(true);
     abortRef.current = false;
 
+    const assistantId = (Date.now() + 1).toString();
+
+    requestConvIdRef.current = currentConvId;
+    pendingStreamRef.current = {
+      convId: currentConvId!,
+      assistantId,
+      accumulatedContent: '',
+      baseMessages: updatedMessages,
+    };
+
     // Save conversation immediately when user sends a message
     saveConversation(updatedMessages);
-
-    const assistantId = (Date.now() + 1).toString();
 
     // Build messages for the AI API (include conversation history)
     const apiMessages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
@@ -344,12 +447,16 @@ export default function ChatPanel({
 
     if (customSettings) {
       // Use custom API via backend proxy
+      abortControllerRef.current = new AbortController();
+
       try {
         // Show loading message
         setMessages((prev) => [
           ...prev,
           { id: assistantId, role: 'assistant', content: '⏳ 正在思考...' },
         ]);
+
+        if (abortRef.current) return;
 
         const response = await client.apiCall.invoke({
           url: '/api/v1/chat/proxy',
@@ -360,23 +467,39 @@ export default function ChatPanel({
             api_key: customSettings.apiKey,
             provider: customSettings.provider,
           },
+          signal: abortControllerRef.current.signal,
         });
+
+        if (abortRef.current) return;
 
         const content =
           (response as { data?: { content?: string } })?.data?.content ||
           '未收到回复';
 
-        const display = processAIResponse(content);
-
-        const finalMessages: Message[] = [
-          ...updatedMessages,
-          { id: assistantId, role: 'assistant', content, displayContent: display },
-        ];
-        setMessages(finalMessages);
-        setIsTyping(false);
-        onCodeGenerate?.();
-        saveConversation(finalMessages);
+        if (requestConvIdRef.current === currentConvIdRef.current) {
+          const display = processAIResponse(content);
+          const finalMessages: Message[] = [
+            ...updatedMessages,
+            { id: assistantId, role: 'assistant', content, displayContent: display },
+          ];
+          setMessages(finalMessages);
+          onCodeGenerate?.();
+          setIsTyping(false);
+          saveConversation(finalMessages, requestConvIdRef.current!);
+        } else {
+          const finalMessages: Message[] = [
+            ...updatedMessages,
+            { id: assistantId, role: 'assistant', content },
+          ];
+          setIsTyping(false);
+          saveConversation(finalMessages, requestConvIdRef.current!, true);
+        }
+        pendingStreamRef.current = null;
       } catch (e: unknown) {
+        if (abortRef.current) {
+          pendingStreamRef.current = null;
+          return;
+        }
         const errorDetail =
           (e as { data?: { detail?: string } })?.data?.detail ||
           (e as { message?: string })?.message ||
@@ -389,9 +512,14 @@ export default function ChatPanel({
             content: `⚠️ ${errorDetail}`,
           },
         ];
-        setMessages(errorMessages);
+        if (requestConvIdRef.current === currentConvIdRef.current) {
+          setMessages(errorMessages);
+        }
         setIsTyping(false);
-        saveConversation(errorMessages);
+        saveConversation(errorMessages, requestConvIdRef.current!, requestConvIdRef.current !== currentConvIdRef.current);
+        pendingStreamRef.current = null;
+      } finally {
+        abortControllerRef.current = null;
       }
     } else {
       // Use built-in Atoms AI (streaming)
@@ -406,6 +534,10 @@ export default function ChatPanel({
             if (abortRef.current) return;
             if (chunk.content) {
               accumulatedContent += chunk.content;
+              if (pendingStreamRef.current) {
+                pendingStreamRef.current.accumulatedContent = accumulatedContent;
+              }
+              if (requestConvIdRef.current !== currentConvIdRef.current) return;
               const currentContent = accumulatedContent;
               setMessages((prev) => {
                 const existing = prev.find((m) => m.id === assistantId);
@@ -422,33 +554,115 @@ export default function ChatPanel({
             }
           },
           onComplete: (finalResult: { content?: string }) => {
-            if (abortRef.current) return;
+            if (abortRef.current) {
+              if (requestConvIdRef.current === currentConvIdRef.current) {
+                setMessages((prev) => {
+                  const updated = prev.map((m) =>
+                    m.id === assistantId
+                      ? { ...m, content: m.content || '(已停止生成)', displayContent: '(已停止生成)' }
+                      : m
+                  );
+                  saveConversation(updated);
+                  return updated;
+                });
+                setIsTyping(false);
+              } else {
+                saveConversation(
+                  [
+                    ...updatedMessages,
+                    {
+                      id: assistantId,
+                      role: 'assistant' as const,
+                      content: accumulatedContent || '(已停止生成)',
+                    },
+                  ],
+                  requestConvIdRef.current!,
+                  true
+                );
+              }
+              pendingStreamRef.current = null;
+              setIsTyping(false);
+              return;
+            }
             const finalContent = finalResult?.content || accumulatedContent;
-            const display = processAIResponse(finalContent);
 
-            const finalMessages: Message[] = [
-              ...updatedMessages,
-              { id: assistantId, role: 'assistant', content: finalContent, displayContent: display },
-            ];
-            setMessages(finalMessages);
-            setIsTyping(false);
-            onCodeGenerate?.();
-            saveConversation(finalMessages);
+            if (requestConvIdRef.current === currentConvIdRef.current) {
+              const display = processAIResponse(finalContent);
+              const finalMessages: Message[] = [
+                ...updatedMessages,
+                { id: assistantId, role: 'assistant', content: finalContent, displayContent: display },
+              ];
+              setMessages(finalMessages);
+              onCodeGenerate?.();
+              setIsTyping(false);
+              saveConversation(finalMessages, requestConvIdRef.current!);
+            } else {
+              const finalMessages: Message[] = [
+                ...updatedMessages,
+                { id: assistantId, role: 'assistant', content: finalContent },
+              ];
+              setIsTyping(false);
+              saveConversation(finalMessages, requestConvIdRef.current!, true);
+            }
+            pendingStreamRef.current = null;
           },
           onError: (error: { message?: string }) => {
-            if (abortRef.current) return;
+            if (abortRef.current) {
+              if (requestConvIdRef.current === currentConvIdRef.current) {
+                setMessages((prev) => {
+                  const updated = prev.map((m) =>
+                    m.id === assistantId
+                      ? { ...m, content: m.content || '(已停止生成)', displayContent: '(已停止生成)' }
+                      : m
+                  );
+                  saveConversation(updated);
+                  return updated;
+                });
+                setIsTyping(false);
+              } else {
+                saveConversation(
+                  [
+                    ...updatedMessages,
+                    {
+                      id: assistantId,
+                      role: 'assistant' as const,
+                      content: accumulatedContent || '(已停止生成)',
+                    },
+                  ],
+                  requestConvIdRef.current!,
+                  true
+                );
+              }
+              pendingStreamRef.current = null;
+              setIsTyping(false);
+              return;
+            }
             const errorMsg = error?.message || '请求失败，请稍后重试';
-            const errorMessages: Message[] = [
-              ...updatedMessages,
-              {
-                id: assistantId,
-                role: 'assistant',
-                content: `⚠️ ${errorMsg}`,
-              },
-            ];
-            setMessages(errorMessages);
-            setIsTyping(false);
-            saveConversation(errorMessages);
+            if (requestConvIdRef.current === currentConvIdRef.current) {
+              const errorMessages: Message[] = [
+                ...updatedMessages,
+                {
+                  id: assistantId,
+                  role: 'assistant',
+                  content: `⚠️ ${errorMsg}`,
+                },
+              ];
+              setMessages(errorMessages);
+              setIsTyping(false);
+              saveConversation(errorMessages, requestConvIdRef.current!);
+            } else {
+              const errorMessages: Message[] = [
+                ...updatedMessages,
+                {
+                  id: assistantId,
+                  role: 'assistant',
+                  content: `⚠️ ${errorMsg}`,
+                },
+              ];
+              setIsTyping(false);
+              saveConversation(errorMessages, requestConvIdRef.current!, true);
+            }
+            pendingStreamRef.current = null;
           },
           timeout: 60_000,
         });
@@ -466,10 +680,18 @@ export default function ChatPanel({
               content: `⚠️ ${errorDetail}`,
             },
           ];
-          setMessages(errorMessages);
+          if (requestConvIdRef.current === currentConvIdRef.current) {
+            setMessages(errorMessages);
+            setIsTyping(false);
+            saveConversation(errorMessages, requestConvIdRef.current!);
+          } else {
+            setIsTyping(false);
+            saveConversation(errorMessages, requestConvIdRef.current!, true);
+          }
+        } else {
           setIsTyping(false);
-          saveConversation(errorMessages);
         }
+        pendingStreamRef.current = null;
       }
     }
   };
@@ -480,6 +702,9 @@ export default function ChatPanel({
       handleSend();
     }
   };
+
+  const isStreamingToCurrentConv =
+    isTyping && requestConvIdRef.current === currentConvId;
 
   return (
     <div className="flex flex-col h-full bg-[#0f0f23] border-r border-border relative">
@@ -555,7 +780,7 @@ export default function ChatPanel({
           ))}
 
           {/* Typing indicator */}
-          {isTyping && !messages.find((m) => m.id === (Date.now() + 1).toString()) && (
+          {isStreamingToCurrentConv && !messages.find((m) => m.id === (Date.now() + 1).toString()) && (
             <div className="flex gap-3 justify-start fade-in-up">
               <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center">
                 <Bot className="w-4 h-4 text-white" />
@@ -584,12 +809,21 @@ export default function ChatPanel({
           />
           <Button
             onClick={handleSend}
-            disabled={!input.trim() || isTyping}
+            disabled={!input.trim() || isStreamingToCurrentConv}
             size="icon"
             className="bg-gradient-to-r from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 text-white border-0"
           >
             <Send className="w-4 h-4" />
           </Button>
+          {isStreamingToCurrentConv && (
+            <Button
+              onClick={handleStop}
+              size="icon"
+              className="bg-red-500 hover:bg-red-600 text-white border-0"
+            >
+              <Square className="w-4 h-4" />
+            </Button>
+          )}
         </div>
       </div>
     </div>

@@ -39,3 +39,18 @@ export function saveLocalConversations(conversations: ConversationItem[]) {
     // ignore
   }
 }
+
+export function deleteLocalConversation(id: string) {
+  const conversations = getLocalConversations();
+  const filtered = conversations.filter((c) => c.id !== id);
+  saveLocalConversations(filtered);
+}
+
+export function renameLocalConversation(id: string, newTitle: string) {
+  const conversations = getLocalConversations();
+  const conv = conversations.find((c) => c.id === id);
+  if (conv) {
+    conv.title = newTitle;
+    saveLocalConversations(conversations);
+  }
+}

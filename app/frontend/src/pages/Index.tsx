@@ -14,7 +14,7 @@ import PublishDialog from '@/components/PublishDialog';
 import ProjectSidebar from '@/components/ProjectSidebar';
 import ConversationSidebar, { ConversationSidebarToggle } from '@/components/ConversationSidebar';
 import { useAuth } from '@/hooks/useAuth';
-import { ConversationItem, getLocalConversations, saveLocalConversations } from '@/lib/conversationUtils';
+import { ConversationItem, getLocalConversations, saveLocalConversations, deleteLocalConversation, renameLocalConversation } from '@/lib/conversationUtils';
 import client from '@/lib/client';
 
 const LOGO_URL =
@@ -88,10 +88,14 @@ export default function IndexPage() {
 
   const handleSelectConversation = useCallback((conv: ConversationItem) => {
     setCurrentConvId(conv.id);
+    setGeneratedFiles([]);
+    setPreviewHtml('');
   }, []);
 
   const handleNewConversation = useCallback(() => {
     setCurrentConvId(null);
+    setGeneratedFiles([]);
+    setPreviewHtml('');
   }, []);
 
   const handleConversationSaved = useCallback(
@@ -108,6 +112,42 @@ export default function IndexPage() {
   const handleSelectProject = useCallback((project: Project) => {
     setCurrentProject(project);
   }, []);
+
+  const handleDeleteConversation = useCallback(
+    async (conv: ConversationItem) => {
+      if (isLoggedIn) {
+        try {
+          await client.entities.conversations.delete({ id: conv.id });
+        } catch {}
+      } else {
+        deleteLocalConversation(conv.id);
+      }
+      if (currentConvId === conv.id) {
+        setCurrentConvId(null);
+        setGeneratedFiles([]);
+        setPreviewHtml('');
+      }
+      await loadConversationList();
+    },
+    [isLoggedIn, currentConvId, loadConversationList]
+  );
+
+  const handleRenameConversation = useCallback(
+    async (conv: ConversationItem, newTitle: string) => {
+      if (isLoggedIn) {
+        try {
+          await client.entities.conversations.update({
+            id: conv.id,
+            data: { title: newTitle },
+          });
+        } catch {}
+      } else {
+        renameLocalConversation(conv.id, newTitle);
+      }
+      await loadConversationList();
+    },
+    [isLoggedIn, loadConversationList]
+  );
 
   const [rightPanelTab, setRightPanelTab] = useState<'preview' | 'editor'>('preview');
 
@@ -231,6 +271,8 @@ export default function IndexPage() {
           currentConvId={currentConvId}
           onSelectConversation={handleSelectConversation}
           onNewConversation={handleNewConversation}
+          onDeleteConversation={handleDeleteConversation}
+          onRenameConversation={handleRenameConversation}
           collapsed={convSidebarCollapsed}
           onToggleCollapse={() => setConvSidebarCollapsed(true)}
         />
@@ -247,6 +289,7 @@ export default function IndexPage() {
               onCodeGenerated={handleCodeGenerated}
               isLoggedIn={isLoggedIn}
               currentConvId={currentConvId}
+              onCodeRestored={handleCodeGenerated}
               onCurrentConvIdChange={handleCurrentConvIdChange}
               onConversationSaved={handleConversationSaved}
             />
