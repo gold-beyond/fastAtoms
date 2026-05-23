@@ -74,12 +74,7 @@ export function getConfig() {
 
 // Dynamic API_BASE_URL getter - this will always return the current config
 export function getAPIBaseURL(): string {
-  const baseURL = getConfig().API_BASE_URL;
-  // If the base URL is just '/', return empty string to avoid double slashes and incorrect http:// prefix
-  if (baseURL === '/') {
-    return '';
-  }
-  return baseURL;
+  return getConfig().API_BASE_URL;
 }
 
 // For backward compatibility, but this should be avoided

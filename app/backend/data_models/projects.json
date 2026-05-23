@@ -1,0 +1,39 @@
+{
+    "title": "projects",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer",
+            "description": "Primary key, auto-increment"
+        },
+        "user_id": {
+            "type": "string",
+            "description": "User ID"
+        },
+        "name": {
+            "type": "string",
+            "description": "Project name"
+        },
+        "code_html": {
+            "type": "string",
+            "description": "HTML code content"
+        },
+        "code_css": {
+            "type": "string",
+            "description": "CSS code content"
+        },
+        "code_js": {
+            "type": "string",
+            "description": "JavaScript code content"
+        },
+        "published_url": {
+            "type": "string",
+            "description": "Published URL if deployed"
+        }
+    },
+    "required": [
+        "id",
+        "user_id",
+        "name"
+    ]
+}
