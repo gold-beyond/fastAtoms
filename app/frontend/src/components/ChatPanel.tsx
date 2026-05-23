@@ -3,8 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Send, Bot, User, FileCode, FileText, Braces, Square } from 'lucide-react';
-import client from '@/lib/client';
-import AISettingsDialog, { getAISettings } from '@/components/AISettings';
+import { api } from '@/lib/simpleApi';
 import { getLocalConversations, saveLocalConversations } from '@/lib/conversationUtils';
 
 interface Message {
@@ -219,6 +218,8 @@ export default function ChatPanel({
     if (currentConvId === prevConvIdRef.current) return;
 
     const prevId = prevConvIdRef.current;
+    const abortController = new AbortController();
+    const signal = abortController.signal;
 
     if (prevId && messagesRef.current.length > 0) {
       const msgs = [...messagesRef.current];
@@ -273,26 +274,31 @@ export default function ChatPanel({
     };
 
     const loadConversation = async () => {
+      if (signal.aborted) return;
       if (isLoggedIn) {
         try {
-          const response = await client.entities.conversations.get({ id: currentConvId });
-          if (response?.data?.messages) {
-            const parsed = JSON.parse(response.data.messages as string);
-            setMessages(parsed);
-            restoreCodeFromMessages(parsed);
+          const data = await api.get<any>(`/api/v1/entities/conversations/${currentConvId}`);
+          if (signal.aborted) return;
+          if (data?.messages) {
+            const parsed = JSON.parse(data.messages as string);
+            if (!signal.aborted) {
+              setMessages(parsed);
+              restoreCodeFromMessages(parsed);
+            }
           }
         } catch {
           // Fall back silently
         }
       } else {
-        // Load from local storage
         const localConvs = getLocalConversations();
         const conv = localConvs.find((c) => c.id === currentConvId);
         if (conv?.messages) {
           try {
             const parsed = JSON.parse(conv.messages);
-            setMessages(parsed);
-            restoreCodeFromMessages(parsed);
+            if (!signal.aborted) {
+              setMessages(parsed);
+              restoreCodeFromMessages(parsed);
+            }
           } catch {
             // ignore
           }
@@ -301,6 +307,10 @@ export default function ChatPanel({
     };
 
     loadConversation();
+
+    return () => {
+      abortController.abort();
+    };
   }, [currentConvId, isLoggedIn]);
 
   const saveConversation = useCallback(
@@ -318,17 +328,12 @@ export default function ChatPanel({
       if (isLoggedIn) {
         try {
           if (targetConvId) {
-            await client.entities.conversations.update({
-              id: targetConvId,
-              data: { title, messages: messagesStr },
-            });
+            await api.put(`/api/v1/entities/conversations/${targetConvId}`, { title, messages: messagesStr });
             if (!silent) onConversationSaved?.(targetConvId);
           } else {
-            const response = await client.entities.conversations.create({
-              data: { title, messages: messagesStr },
-            });
-            if (response?.data?.id) {
-              const newId = response.data.id as string;
+            const data = await api.post<any>('/api/v1/entities/conversations', { title, messages: messagesStr });
+            if (data?.id) {
+              const newId = String(data.id);
               prevConvIdRef.current = newId;
               onCurrentConvIdChange?.(newId);
               if (!silent) onConversationSaved?.(newId);
@@ -442,257 +447,70 @@ export default function ChatPanel({
       })),
     ];
 
-    // Check if custom AI settings are configured
-    const customSettings = getAISettings();
+    // Use backend proxy with DeepSeek
+    abortControllerRef.current = new AbortController();
 
-    if (customSettings) {
-      // Use custom API via backend proxy
-      abortControllerRef.current = new AbortController();
+    try {
+      setMessages((prev) => [
+        ...prev,
+        { id: assistantId, role: 'assistant', content: '⏳ 正在思考...' },
+      ]);
 
-      try {
-        // Show loading message
-        setMessages((prev) => [
-          ...prev,
-          { id: assistantId, role: 'assistant', content: '⏳ 正在思考...' },
-        ]);
+      if (abortRef.current) return;
 
-        if (abortRef.current) return;
+      const data = await api.post<any>('/api/v1/chat/proxy', {
+        messages: apiMessages,
+        model: 'deepseek-chat',
+      });
 
-        const response = await client.apiCall.invoke({
-          url: '/api/v1/chat/proxy',
-          method: 'POST',
-          data: {
-            messages: apiMessages,
-            model: customSettings.model,
-            api_key: customSettings.apiKey,
-            provider: customSettings.provider,
-          },
-          signal: abortControllerRef.current.signal,
-        });
+      if (abortRef.current) return;
 
-        if (abortRef.current) return;
+      const content = data?.content || '未收到回复';
 
-        const content =
-          (response as { data?: { content?: string } })?.data?.content ||
-          '未收到回复';
-
-        if (requestConvIdRef.current === currentConvIdRef.current) {
-          const display = processAIResponse(content);
-          const finalMessages: Message[] = [
-            ...updatedMessages,
-            { id: assistantId, role: 'assistant', content, displayContent: display },
-          ];
-          setMessages(finalMessages);
-          onCodeGenerate?.();
-          setIsTyping(false);
-          saveConversation(finalMessages, requestConvIdRef.current!);
-        } else {
-          const finalMessages: Message[] = [
-            ...updatedMessages,
-            { id: assistantId, role: 'assistant', content },
-          ];
-          setIsTyping(false);
-          saveConversation(finalMessages, requestConvIdRef.current!, true);
-        }
-        pendingStreamRef.current = null;
-      } catch (e: unknown) {
-        if (abortRef.current) {
-          pendingStreamRef.current = null;
-          return;
-        }
-        const errorDetail =
-          (e as { data?: { detail?: string } })?.data?.detail ||
-          (e as { message?: string })?.message ||
-          '请求失败，请检查 API 设置';
-        const errorMessages: Message[] = [
+      if (requestConvIdRef.current === currentConvIdRef.current) {
+        const display = processAIResponse(content);
+        const finalMessages: Message[] = [
           ...updatedMessages,
-          {
-            id: assistantId,
-            role: 'assistant',
-            content: `⚠️ ${errorDetail}`,
-          },
+          { id: assistantId, role: 'assistant', content, displayContent: display },
         ];
-        if (requestConvIdRef.current === currentConvIdRef.current) {
-          setMessages(errorMessages);
-        }
+        setMessages(finalMessages);
+        onCodeGenerate?.();
         setIsTyping(false);
-        saveConversation(errorMessages, requestConvIdRef.current!, requestConvIdRef.current !== currentConvIdRef.current);
-        pendingStreamRef.current = null;
-      } finally {
-        abortControllerRef.current = null;
+        saveConversation(finalMessages, requestConvIdRef.current!);
+      } else {
+        const finalMessages: Message[] = [
+          ...updatedMessages,
+          { id: assistantId, role: 'assistant', content },
+        ];
+        setIsTyping(false);
+        saveConversation(finalMessages, requestConvIdRef.current!, true);
       }
-    } else {
-      // Use built-in Atoms AI (streaming)
-      let accumulatedContent = '';
-
-      try {
-        await client.ai.gentxt({
-          messages: apiMessages,
-          model: 'claude-opus-4.6',
-          stream: true,
-          onChunk: (chunk: { content?: string }) => {
-            if (abortRef.current) return;
-            if (chunk.content) {
-              accumulatedContent += chunk.content;
-              if (pendingStreamRef.current) {
-                pendingStreamRef.current.accumulatedContent = accumulatedContent;
-              }
-              if (requestConvIdRef.current !== currentConvIdRef.current) return;
-              const currentContent = accumulatedContent;
-              setMessages((prev) => {
-                const existing = prev.find((m) => m.id === assistantId);
-                if (existing) {
-                  return prev.map((m) =>
-                    m.id === assistantId ? { ...m, content: currentContent } : m
-                  );
-                }
-                return [
-                  ...prev,
-                  { id: assistantId, role: 'assistant', content: currentContent },
-                ];
-              });
-            }
-          },
-          onComplete: (finalResult: { content?: string }) => {
-            if (abortRef.current) {
-              if (requestConvIdRef.current === currentConvIdRef.current) {
-                setMessages((prev) => {
-                  const updated = prev.map((m) =>
-                    m.id === assistantId
-                      ? { ...m, content: m.content || '(已停止生成)', displayContent: '(已停止生成)' }
-                      : m
-                  );
-                  saveConversation(updated);
-                  return updated;
-                });
-                setIsTyping(false);
-              } else {
-                saveConversation(
-                  [
-                    ...updatedMessages,
-                    {
-                      id: assistantId,
-                      role: 'assistant' as const,
-                      content: accumulatedContent || '(已停止生成)',
-                    },
-                  ],
-                  requestConvIdRef.current!,
-                  true
-                );
-              }
-              pendingStreamRef.current = null;
-              setIsTyping(false);
-              return;
-            }
-            const finalContent = finalResult?.content || accumulatedContent;
-
-            if (requestConvIdRef.current === currentConvIdRef.current) {
-              const display = processAIResponse(finalContent);
-              const finalMessages: Message[] = [
-                ...updatedMessages,
-                { id: assistantId, role: 'assistant', content: finalContent, displayContent: display },
-              ];
-              setMessages(finalMessages);
-              onCodeGenerate?.();
-              setIsTyping(false);
-              saveConversation(finalMessages, requestConvIdRef.current!);
-            } else {
-              const finalMessages: Message[] = [
-                ...updatedMessages,
-                { id: assistantId, role: 'assistant', content: finalContent },
-              ];
-              setIsTyping(false);
-              saveConversation(finalMessages, requestConvIdRef.current!, true);
-            }
-            pendingStreamRef.current = null;
-          },
-          onError: (error: { message?: string }) => {
-            if (abortRef.current) {
-              if (requestConvIdRef.current === currentConvIdRef.current) {
-                setMessages((prev) => {
-                  const updated = prev.map((m) =>
-                    m.id === assistantId
-                      ? { ...m, content: m.content || '(已停止生成)', displayContent: '(已停止生成)' }
-                      : m
-                  );
-                  saveConversation(updated);
-                  return updated;
-                });
-                setIsTyping(false);
-              } else {
-                saveConversation(
-                  [
-                    ...updatedMessages,
-                    {
-                      id: assistantId,
-                      role: 'assistant' as const,
-                      content: accumulatedContent || '(已停止生成)',
-                    },
-                  ],
-                  requestConvIdRef.current!,
-                  true
-                );
-              }
-              pendingStreamRef.current = null;
-              setIsTyping(false);
-              return;
-            }
-            const errorMsg = error?.message || '请求失败，请稍后重试';
-            if (requestConvIdRef.current === currentConvIdRef.current) {
-              const errorMessages: Message[] = [
-                ...updatedMessages,
-                {
-                  id: assistantId,
-                  role: 'assistant',
-                  content: `⚠️ ${errorMsg}`,
-                },
-              ];
-              setMessages(errorMessages);
-              setIsTyping(false);
-              saveConversation(errorMessages, requestConvIdRef.current!);
-            } else {
-              const errorMessages: Message[] = [
-                ...updatedMessages,
-                {
-                  id: assistantId,
-                  role: 'assistant',
-                  content: `⚠️ ${errorMsg}`,
-                },
-              ];
-              setIsTyping(false);
-              saveConversation(errorMessages, requestConvIdRef.current!, true);
-            }
-            pendingStreamRef.current = null;
-          },
-          timeout: 60_000,
-        });
-      } catch (e: unknown) {
-        if (!abortRef.current) {
-          const errorDetail =
-            (e as { data?: { detail?: string } })?.data?.detail ||
-            (e as { message?: string })?.message ||
-            '请求失败，请稍后重试';
-          const errorMessages: Message[] = [
-            ...updatedMessages,
-            {
-              id: assistantId,
-              role: 'assistant',
-              content: `⚠️ ${errorDetail}`,
-            },
-          ];
-          if (requestConvIdRef.current === currentConvIdRef.current) {
-            setMessages(errorMessages);
-            setIsTyping(false);
-            saveConversation(errorMessages, requestConvIdRef.current!);
-          } else {
-            setIsTyping(false);
-            saveConversation(errorMessages, requestConvIdRef.current!, true);
-          }
-        } else {
-          setIsTyping(false);
-        }
+      pendingStreamRef.current = null;
+    } catch (e: unknown) {
+      if (abortRef.current) {
         pendingStreamRef.current = null;
+        return;
       }
+      const errorDetail =
+        (e as { data?: { detail?: string } })?.data?.detail ||
+        (e as { message?: string })?.message ||
+        '请求失败，请稍后重试';
+      const errorMessages: Message[] = [
+        ...updatedMessages,
+        {
+          id: assistantId,
+          role: 'assistant',
+          content: `⚠️ ${errorDetail}`,
+        },
+      ];
+      if (requestConvIdRef.current === currentConvIdRef.current) {
+        setMessages(errorMessages);
+      }
+      setIsTyping(false);
+      saveConversation(errorMessages, requestConvIdRef.current!, requestConvIdRef.current !== currentConvIdRef.current);
+      pendingStreamRef.current = null;
+    } finally {
+      abortControllerRef.current = null;
     }
   };
 
@@ -714,9 +532,6 @@ export default function ChatPanel({
         <span className="text-sm font-medium text-muted-foreground">
           AI 助手
         </span>
-        <div className="ml-auto flex items-center gap-1">
-          <AISettingsDialog />
-        </div>
       </div>
 
       {/* Messages */}

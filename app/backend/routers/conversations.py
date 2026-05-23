@@ -2,9 +2,9 @@ import json
 import logging
 from typing import List, Optional
 
-from datetime import datetime, date
+from datetime import datetime
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api/v1/entities/conversations", tags=["conversations
 class ConversationsData(BaseModel):
     """Entity data schema (for create/update)"""
     title: str
-    messages: str = None
+    messages: Optional[str] = None
 
 
 class ConversationsUpdateData(BaseModel):
@@ -121,14 +121,14 @@ async def query_conversationss_all(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(20, ge=1, le=2000, description="Max number of records to return"),
     fields: str = Query(None, description="Comma-separated list of fields to return"),
+    current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Query conversationss with filtering, sorting, and pagination without user limitation
-    logger.debug(f"Querying conversationss: query={query}, sort={sort}, skip={skip}, limit={limit}, fields={fields}")
+    # Query conversationss with filtering, sorting, and pagination (admin only, user scoped)
+    logger.debug("Querying conversationss all: query=%s, sort=%s, skip=%d, limit=%d, fields=%s", query, sort, skip, limit, fields)
 
     service = ConversationsService(db)
     try:
-        # Parse query JSON if provided
         query_dict = None
         if query:
             try:
@@ -140,14 +140,15 @@ async def query_conversationss_all(
             skip=skip,
             limit=limit,
             query_dict=query_dict,
-            sort=sort
+            sort=sort,
+            user_id=str(current_user.id),
         )
-        logger.debug(f"Found {result['total']} conversationss")
+        logger.debug("Found %d conversationss", result['total'])
         return result
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error querying conversationss: {str(e)}", exc_info=True)
+        logger.error("Error querying conversationss: %s", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 

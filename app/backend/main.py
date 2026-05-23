@@ -87,9 +87,20 @@ app = FastAPI(
 
 
 # MODULE_MIDDLEWARE_START
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+if settings.is_lambda:
+    lambda_origin = os.environ.get("CORS_ORIGIN", "*")
+    if lambda_origin != "*":
+        origins = [lambda_origin]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r".*",
+    allow_origins=origins if origins != ["*"] else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -112,53 +112,46 @@ class DatabaseManager:
                 logger.info("Database already initialized")
                 return
 
-        if not settings.database_url:
-            logger.error("No database URL provided. DATABASE_URL environment variable must be set.")
-            raise ValueError("DATABASE_URL environment variable is required")
+            if not settings.database_url:
+                logger.error("No database URL provided. DATABASE_URL environment variable must be set.")
+                raise ValueError("DATABASE_URL environment variable is required")
 
-        try:
-            logger.info("Normalizing database URL for async compatibility...")
-            database_url = self._normalize_async_database_url(settings.database_url)
+            try:
+                logger.info("Normalizing database URL for async compatibility...")
+                database_url = self._normalize_async_database_url(settings.database_url)
 
-            logger.info("Creating async database engine...")
-            # Configure engine based on environment (Lambda vs non-Lambda)
-            engine_kwargs = {
-                "echo": settings.debug,
-            }
+                logger.info("Creating async database engine...")
+                engine_kwargs = {
+                    "echo": settings.debug,
+                }
 
-            # Check if we're in a Lambda environment
-            is_lambda = bool(
-                os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
-                or os.environ.get("IS_LAMBDA", "").lower() in ("true", "1", "yes")
-            )
+                is_lambda = bool(
+                    os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
+                    or os.environ.get("IS_LAMBDA", "").lower() in ("true", "1", "yes")
+                )
 
-            if is_lambda:
-                # Lambda: Use NullPool to avoid connection state conflicts
-                # NullPool creates a fresh connection for each request, avoiding "cannot switch to state" errors
-                engine_kwargs["poolclass"] = NullPool
-                # NullPool doesn't support pool_timeout, pool_size, max_overflow, pool_recycle, or pool_pre_ping
-                # These parameters are only valid for QueuePool
-                logger.info("Using NullPool for Lambda environment to avoid connection state conflicts")
-            else:
-                # Non-Lambda: Use QueuePool with connection pooling
-                engine_kwargs["pool_pre_ping"] = True  # Verify connections before using them
-                engine_kwargs["pool_size"] = 10  # Connection pool size
-                engine_kwargs["max_overflow"] = 20  # Maximum overflow connections
-                engine_kwargs["pool_recycle"] = 3600  # Connection recycle time (1 hour)
-                engine_kwargs["pool_timeout"] = 30  # Connection acquisition timeout (30 seconds)
-                logger.info("Using QueuePool with connection pooling for non-Lambda environment")
+                if is_lambda:
+                    engine_kwargs["poolclass"] = NullPool
+                    logger.info("Using NullPool for Lambda environment to avoid connection state conflicts")
+                else:
+                    engine_kwargs["pool_pre_ping"] = True
+                    engine_kwargs["pool_size"] = 10
+                    engine_kwargs["max_overflow"] = 20
+                    engine_kwargs["pool_recycle"] = 3600
+                    engine_kwargs["pool_timeout"] = 30
+                    logger.info("Using QueuePool with connection pooling for non-Lambda environment")
 
-            self.engine = create_async_engine(database_url, **engine_kwargs)
-            logger.info("Database engine created successfully")
+                self.engine = create_async_engine(database_url, **engine_kwargs)
+                logger.info("Database engine created successfully")
 
-            logger.info("Creating async session maker...")
-            self.async_session_maker = async_sessionmaker(self.engine, class_=AsyncSession, expire_on_commit=False)
-            logger.info("Async session maker created successfully")
+                logger.info("Creating async session maker...")
+                self.async_session_maker = async_sessionmaker(self.engine, class_=AsyncSession, expire_on_commit=False)
+                logger.info("Async session maker created successfully")
 
-            logger.info("Database connection initialized successfully")
-        except Exception as e:
-            logger.error(f"Failed to initialize database: {e}", exc_info=True)
-            raise
+                logger.info("Database connection initialized successfully")
+            except Exception as e:
+                logger.error("Failed to initialize database: %s", e, exc_info=True)
+                raise
 
     async def close_db(self):
         """Close database connection and dispose engine
@@ -498,31 +491,26 @@ class DatabaseManager:
 
     async def ensure_initialized(self):
         """Ensure database is initialized - used for lazy loading in Lambda environments"""
-        # Quick check without lock (double-checked locking pattern)
         if self.async_session_maker is not None:
             return
 
-        # Use lock to prevent concurrent initialization attempts in the same Lambda execution environment
         async with self._init_lock:
-            # Double-check after acquiring lock (another request might have initialized it while we waited)
             if self.async_session_maker is not None:
+                return
+
+            if self.engine is not None:
+                logger.info("Database engine already initialized")
                 return
 
             logger.warning("Database not initialized, attempting lazy initialization...")
 
-        # Release lock before calling init_db() because:
-        # 1. init_db() will try to acquire the same _init_lock internally (line 93), which would cause deadlock
-        # 2. Note: init_db() has a bug - its lock is released after the check (line 96),
-        #    so the actual initialization code (lines 98-146) is not protected by lock.
-        #    This is a pre-existing issue, not introduced by this change.
-        # 3. The double-checked locking pattern above ensures only one request proceeds to initialization
-        try:
-            await self.init_db()
-            await self.create_tables()
-            logger.info("Lazy database initialization completed successfully")
-        except Exception as e:
-            logger.error(f"Failed to lazy initialize database: {e}", exc_info=True)
-            raise
+            try:
+                await self.init_db()
+                await self.create_tables()
+                logger.info("Lazy database initialization completed successfully")
+            except Exception as e:
+                logger.error("Failed to lazy initialize database: %s", e, exc_info=True)
+                raise
 
 
 db_manager = DatabaseManager()

@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -14,8 +15,8 @@ import PublishDialog from '@/components/PublishDialog';
 import ProjectSidebar from '@/components/ProjectSidebar';
 import ConversationSidebar, { ConversationSidebarToggle } from '@/components/ConversationSidebar';
 import { useAuth } from '@/hooks/useAuth';
+import { api } from '@/lib/simpleApi';
 import { ConversationItem, getLocalConversations, saveLocalConversations, deleteLocalConversation, renameLocalConversation } from '@/lib/conversationUtils';
-import client from '@/lib/client';
 
 const LOGO_URL =
   'https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-22/pcdp5pyaagrq/atoms-logo-glow.png';
@@ -39,7 +40,8 @@ interface GeneratedFile {
 }
 
 export default function IndexPage() {
-  const { user, loading, login, logout } = useAuth();
+  const { user, loading, logout } = useAuth();
+  const navigate = useNavigate();
   const [publishOpen, setPublishOpen] = useState(false);
   const [chatCollapsed, setChatCollapsed] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(false);
@@ -54,19 +56,30 @@ export default function IndexPage() {
 
   const isLoggedIn = !!user;
 
+  useEffect(() => {
+    if (!loading && !user) {
+      navigate('/login', { replace: true });
+    }
+  }, [loading, user, navigate]);
+
   const loadConversationList = useCallback(async () => {
     if (isLoggedIn) {
       try {
-        const response = await client.entities.conversations.list();
-        const data = response?.data;
-        if (Array.isArray(data)) {
-          const items: ConversationItem[] = data.map((item: Record<string, unknown>) => ({
-            id: item.id as string,
-            title: (item.title as string) || '新对话',
-            created_at: item.created_at as string | undefined,
-            messages: item.messages as string | undefined,
-          }));
-          // Sort by created_at descending
+        const data = await api.get<any>('/api/v1/entities/conversations');
+        if (data?.items && Array.isArray(data.items)) {
+          const seen = new Set<string>();
+          const items: ConversationItem[] = [];
+          for (const item of data.items) {
+            const id = String(item.id);
+            if (seen.has(id)) continue;
+            seen.add(id);
+            items.push({
+              id,
+              title: (item.title as string) || '新对话',
+              created_at: item.created_at as string | undefined,
+              messages: item.messages as string | undefined,
+            });
+          }
           items.sort((a, b) => {
             if (!a.created_at || !b.created_at) return 0;
             return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
@@ -77,14 +90,27 @@ export default function IndexPage() {
         // Silently handle errors
       }
     } else {
-      setConversations(getLocalConversations());
+      const raw = getLocalConversations();
+      const seen = new Set<string>();
+      const deduped = raw.filter((c) => {
+        if (seen.has(c.id)) return false;
+        seen.add(c.id);
+        return true;
+      });
+      if (deduped.length !== raw.length) {
+        saveLocalConversations(deduped);
+      }
+      setConversations(deduped);
     }
   }, [isLoggedIn]);
 
-  // Load conversation list on mount and when login state changes
+  // Load conversation list only after auth has settled
   useEffect(() => {
+    if (loading) return;
     loadConversationList();
-  }, [loadConversationList]);
+  }, [loadConversationList, loading]);
+
+
 
   const handleSelectConversation = useCallback((conv: ConversationItem) => {
     setCurrentConvId(conv.id);
@@ -117,7 +143,7 @@ export default function IndexPage() {
     async (conv: ConversationItem) => {
       if (isLoggedIn) {
         try {
-          await client.entities.conversations.delete({ id: conv.id });
+          await api.del(`/api/v1/entities/conversations/${conv.id}`);
         } catch {}
       } else {
         deleteLocalConversation(conv.id);
@@ -136,10 +162,7 @@ export default function IndexPage() {
     async (conv: ConversationItem, newTitle: string) => {
       if (isLoggedIn) {
         try {
-          await client.entities.conversations.update({
-            id: conv.id,
-            data: { title: newTitle },
-          });
+          await api.put(`/api/v1/entities/conversations/${conv.id}`, { title: newTitle });
         } catch {}
       } else {
         renameLocalConversation(conv.id, newTitle);
@@ -244,7 +267,7 @@ export default function IndexPage() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={login}
+              onClick={() => navigate('/login')}
               className="text-indigo-400 hover:text-indigo-300 text-xs"
             >
               登录
