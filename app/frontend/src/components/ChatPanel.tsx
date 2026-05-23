@@ -9,7 +9,6 @@ interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
-  isTyping?: boolean;
 }
 
 interface ChatPanelProps {
@@ -18,6 +17,9 @@ interface ChatPanelProps {
   onConversationSaved?: (id: string) => void;
   isLoggedIn?: boolean;
 }
+
+const SYSTEM_PROMPT =
+  '你是 Atoms 平台的 AI 编程助手。你可以帮助用户生成代码、解答编程问题、设计网页和应用。请用中文回复。';
 
 const DEMO_MESSAGES: Message[] = [
   {
@@ -34,12 +36,6 @@ const DEMO_MESSAGES: Message[] = [
   },
 ];
 
-const AI_RESPONSES = [
-  '已为你更新了样式文件，添加了渐变动画效果。预览窗口中可以看到实时变化。',
-  '代码已生成完毕！你可以在右侧编辑器中查看完整代码，也可以在预览窗口中查看效果。',
-  '好的，我来帮你调整。正在修改布局和配色方案...',
-];
-
 export default function ChatPanel({
   onCodeGenerate,
   conversationId,
@@ -53,7 +49,7 @@ export default function ChatPanel({
     conversationId || null
   );
   const scrollRef = useRef<HTMLDivElement>(null);
-  const responseIndex = useRef(0);
+  const abortRef = useRef(false);
 
   // Load conversation if conversationId is provided
   useEffect(() => {
@@ -112,7 +108,7 @@ export default function ChatPanel({
     }
   }, [messages]);
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!input.trim() || isTyping) return;
 
     const userMessage: Message = {
@@ -125,29 +121,91 @@ export default function ChatPanel({
     setMessages(updatedMessages);
     setInput('');
     setIsTyping(true);
+    abortRef.current = false;
 
-    // Simulate AI typing
-    setTimeout(() => {
-      const response =
-        AI_RESPONSES[responseIndex.current % AI_RESPONSES.length];
-      responseIndex.current++;
+    const assistantId = (Date.now() + 1).toString();
 
-      const finalMessages = [
-        ...updatedMessages,
-        {
-          id: (Date.now() + 1).toString(),
-          role: 'assistant' as const,
-          content: response,
+    // Build messages for the AI API (include conversation history)
+    const apiMessages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
+      { role: 'system', content: SYSTEM_PROMPT },
+      ...updatedMessages.map((m) => ({
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+      })),
+    ];
+
+    let accumulatedContent = '';
+
+    try {
+      await client.ai.gentxt({
+        messages: apiMessages,
+        model: 'claude-opus-4.6',
+        stream: true,
+        onChunk: (chunk: { content?: string }) => {
+          if (abortRef.current) return;
+          if (chunk.content) {
+            accumulatedContent += chunk.content;
+            const currentContent = accumulatedContent;
+            setMessages((prev) => {
+              const existing = prev.find((m) => m.id === assistantId);
+              if (existing) {
+                return prev.map((m) =>
+                  m.id === assistantId ? { ...m, content: currentContent } : m
+                );
+              }
+              return [
+                ...prev,
+                { id: assistantId, role: 'assistant', content: currentContent },
+              ];
+            });
+          }
         },
-      ];
-
-      setMessages(finalMessages);
-      setIsTyping(false);
-      onCodeGenerate?.();
-
-      // Auto-save conversation
-      saveConversation(finalMessages);
-    }, 1500);
+        onComplete: (finalResult: { content?: string }) => {
+          if (abortRef.current) return;
+          const finalContent = finalResult?.content || accumulatedContent;
+          const finalMessages: Message[] = [
+            ...updatedMessages,
+            { id: assistantId, role: 'assistant', content: finalContent },
+          ];
+          setMessages(finalMessages);
+          setIsTyping(false);
+          onCodeGenerate?.();
+          saveConversation(finalMessages);
+        },
+        onError: (error: { message?: string }) => {
+          if (abortRef.current) return;
+          const errorMsg = error?.message || '请求失败，请稍后重试';
+          const errorMessages: Message[] = [
+            ...updatedMessages,
+            {
+              id: assistantId,
+              role: 'assistant',
+              content: `⚠️ ${errorMsg}`,
+            },
+          ];
+          setMessages(errorMessages);
+          setIsTyping(false);
+        },
+        timeout: 60_000,
+      });
+    } catch (e: unknown) {
+      if (!abortRef.current) {
+        const errorDetail =
+          (e as { data?: { detail?: string } })?.data?.detail ||
+          (e as { message?: string })?.message ||
+          '请求失败，请稍后重试';
+        const errorMessages: Message[] = [
+          ...updatedMessages,
+          {
+            id: assistantId,
+            role: 'assistant',
+            content: `⚠️ ${errorDetail}`,
+          },
+        ];
+        setMessages(errorMessages);
+        setIsTyping(false);
+      }
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -200,7 +258,7 @@ export default function ChatPanel({
           ))}
 
           {/* Typing indicator */}
-          {isTyping && (
+          {isTyping && !messages.find((m) => m.id === (Date.now() + 1).toString()) && (
             <div className="flex gap-3 justify-start fade-in-up">
               <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center">
                 <Bot className="w-4 h-4 text-white" />

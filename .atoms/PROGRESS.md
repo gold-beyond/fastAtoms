@@ -22,4 +22,5 @@ last_updated: 2026-05-22T09:11:52Z
 ## Progress Log
 - 2026-05-22: All 5 tasks implemented. Lint and build pass. Dark theme IDE layout with chat, code editor, preview, and publish flow complete.
 - 2026-05-22: Backend activated. Created conversations and projects tables via BackendManager.
+- 2026-05-22: Implemented real AI chat using client.ai.gentxt streaming with claude-opus-4.6 model. Replaced simulated responses with live AI streaming.
 
