@@ -4,6 +4,7 @@ import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Send, Bot, User } from 'lucide-react';
 import client from '@/lib/client';
+import AISettingsDialog, { getAISettings } from '@/components/AISettings';
 
 interface Message {
   id: string;
@@ -134,66 +135,46 @@ export default function ChatPanel({
       })),
     ];
 
-    let accumulatedContent = '';
+    // Check if custom AI settings are configured
+    const customSettings = getAISettings();
 
-    try {
-      await client.ai.gentxt({
-        messages: apiMessages,
-        model: 'claude-opus-4.6',
-        stream: true,
-        onChunk: (chunk: { content?: string }) => {
-          if (abortRef.current) return;
-          if (chunk.content) {
-            accumulatedContent += chunk.content;
-            const currentContent = accumulatedContent;
-            setMessages((prev) => {
-              const existing = prev.find((m) => m.id === assistantId);
-              if (existing) {
-                return prev.map((m) =>
-                  m.id === assistantId ? { ...m, content: currentContent } : m
-                );
-              }
-              return [
-                ...prev,
-                { id: assistantId, role: 'assistant', content: currentContent },
-              ];
-            });
-          }
-        },
-        onComplete: (finalResult: { content?: string }) => {
-          if (abortRef.current) return;
-          const finalContent = finalResult?.content || accumulatedContent;
-          const finalMessages: Message[] = [
-            ...updatedMessages,
-            { id: assistantId, role: 'assistant', content: finalContent },
-          ];
-          setMessages(finalMessages);
-          setIsTyping(false);
-          onCodeGenerate?.();
-          saveConversation(finalMessages);
-        },
-        onError: (error: { message?: string }) => {
-          if (abortRef.current) return;
-          const errorMsg = error?.message || '请求失败，请稍后重试';
-          const errorMessages: Message[] = [
-            ...updatedMessages,
-            {
-              id: assistantId,
-              role: 'assistant',
-              content: `⚠️ ${errorMsg}`,
-            },
-          ];
-          setMessages(errorMessages);
-          setIsTyping(false);
-        },
-        timeout: 60_000,
-      });
-    } catch (e: unknown) {
-      if (!abortRef.current) {
+    if (customSettings) {
+      // Use custom API via backend proxy
+      try {
+        // Show loading message
+        setMessages((prev) => [
+          ...prev,
+          { id: assistantId, role: 'assistant', content: '⏳ 正在思考...' },
+        ]);
+
+        const response = await client.apiCall.invoke({
+          url: '/api/v1/chat/proxy',
+          method: 'POST',
+          data: {
+            messages: apiMessages,
+            model: customSettings.model,
+            api_key: customSettings.apiKey,
+            provider: customSettings.provider,
+          },
+        });
+
+        const content =
+          (response as { data?: { content?: string } })?.data?.content ||
+          '未收到回复';
+
+        const finalMessages: Message[] = [
+          ...updatedMessages,
+          { id: assistantId, role: 'assistant', content },
+        ];
+        setMessages(finalMessages);
+        setIsTyping(false);
+        onCodeGenerate?.();
+        saveConversation(finalMessages);
+      } catch (e: unknown) {
         const errorDetail =
           (e as { data?: { detail?: string } })?.data?.detail ||
           (e as { message?: string })?.message ||
-          '请求失败，请稍后重试';
+          '请求失败，请检查 API 设置';
         const errorMessages: Message[] = [
           ...updatedMessages,
           {
@@ -204,6 +185,80 @@ export default function ChatPanel({
         ];
         setMessages(errorMessages);
         setIsTyping(false);
+      }
+    } else {
+      // Use built-in Atoms AI (streaming)
+      let accumulatedContent = '';
+
+      try {
+        await client.ai.gentxt({
+          messages: apiMessages,
+          model: 'claude-opus-4.6',
+          stream: true,
+          onChunk: (chunk: { content?: string }) => {
+            if (abortRef.current) return;
+            if (chunk.content) {
+              accumulatedContent += chunk.content;
+              const currentContent = accumulatedContent;
+              setMessages((prev) => {
+                const existing = prev.find((m) => m.id === assistantId);
+                if (existing) {
+                  return prev.map((m) =>
+                    m.id === assistantId ? { ...m, content: currentContent } : m
+                  );
+                }
+                return [
+                  ...prev,
+                  { id: assistantId, role: 'assistant', content: currentContent },
+                ];
+              });
+            }
+          },
+          onComplete: (finalResult: { content?: string }) => {
+            if (abortRef.current) return;
+            const finalContent = finalResult?.content || accumulatedContent;
+            const finalMessages: Message[] = [
+              ...updatedMessages,
+              { id: assistantId, role: 'assistant', content: finalContent },
+            ];
+            setMessages(finalMessages);
+            setIsTyping(false);
+            onCodeGenerate?.();
+            saveConversation(finalMessages);
+          },
+          onError: (error: { message?: string }) => {
+            if (abortRef.current) return;
+            const errorMsg = error?.message || '请求失败，请稍后重试';
+            const errorMessages: Message[] = [
+              ...updatedMessages,
+              {
+                id: assistantId,
+                role: 'assistant',
+                content: `⚠️ ${errorMsg}`,
+              },
+            ];
+            setMessages(errorMessages);
+            setIsTyping(false);
+          },
+          timeout: 60_000,
+        });
+      } catch (e: unknown) {
+        if (!abortRef.current) {
+          const errorDetail =
+            (e as { data?: { detail?: string } })?.data?.detail ||
+            (e as { message?: string })?.message ||
+            '请求失败，请稍后重试';
+          const errorMessages: Message[] = [
+            ...updatedMessages,
+            {
+              id: assistantId,
+              role: 'assistant',
+              content: `⚠️ ${errorDetail}`,
+            },
+          ];
+          setMessages(errorMessages);
+          setIsTyping(false);
+        }
       }
     }
   };
@@ -223,6 +278,9 @@ export default function ChatPanel({
         <span className="text-sm font-medium text-muted-foreground">
           AI 助手
         </span>
+        <div className="ml-auto">
+          <AISettingsDialog />
+        </div>
       </div>
 
       {/* Messages */}

@@ -35,3 +35,6 @@ PyMuPDF
 
 # payment module dependencies
 stripe>=12.0.0
+
+# ai proxy dependencies
+anthropic>=0.34.0
