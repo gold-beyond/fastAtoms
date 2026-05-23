@@ -163,6 +163,22 @@ ${jsCode ? `<script>\n${jsCode}\n</script>` : ''}
   return { files, displayContent, fullHtml };
 }
 
+/**
+ * Returns display-friendly content for a message by stripping code blocks.
+ * Used during streaming when displayContent hasn't been set yet.
+ */
+function getDisplayContent(msg: Message): string {
+  if (msg.displayContent) return msg.displayContent;
+  if (msg.role === 'user') return msg.content;
+  // Strip code blocks on-the-fly for assistant messages during streaming
+  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
+  if (!codeBlockRegex.test(msg.content)) return msg.content;
+  return msg.content.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang: string) => {
+    const fileName = getFileName(lang.toLowerCase() || 'text');
+    return `\n📄 ${fileName} 已生成 →\n`;
+  });
+}
+
 export default function ChatPanel({
   onCodeGenerate,
   onCodeGenerated,
@@ -480,7 +496,7 @@ export default function ChatPanel({
                 }`}
               >
                 <p className="whitespace-pre-wrap">
-                  {msg.displayContent || msg.content}
+                  {getDisplayContent(msg)}
                 </p>
               </div>
               {msg.role === 'user' && (
