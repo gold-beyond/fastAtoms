@@ -26,4 +26,5 @@ last_updated: 2026-05-22T09:11:52Z
 - 2026-05-22: Backend activated. Created conversations and projects tables via BackendManager.
 - 2026-05-22: Implemented real AI chat using client.ai.gentxt streaming with claude-opus-4.6 model. Replaced simulated responses with live AI streaming.
 - 2026-05-22: Added backend AI proxy (POST /api/v1/chat/proxy) supporting OpenAI, Anthropic, DeepSeek with user's own API keys. Added AISettings UI component with provider/key/model configuration stored in localStorage. ChatPanel now switches between built-in Atoms AI and custom proxy based on settings.
+- 2026-05-22: Added conversation history feature. Chat header now has a clock icon button that toggles a conversation history overlay. Logged-in users fetch history from backend; non-logged-in users use localStorage. Users can switch between conversations and create new ones.
 

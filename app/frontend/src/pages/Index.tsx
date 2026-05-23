@@ -41,16 +41,11 @@ export default function IndexPage() {
   const [chatCollapsed, setChatCollapsed] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(false);
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
-  const [conversationId, setConversationId] = useState<string | null>(null);
   const [generatedFiles, setGeneratedFiles] = useState<GeneratedFile[]>([]);
   const [previewHtml, setPreviewHtml] = useState<string>('');
 
   const handleSelectProject = useCallback((project: Project) => {
     setCurrentProject(project);
-  }, []);
-
-  const handleConversationSaved = useCallback((id: string) => {
-    setConversationId(id);
   }, []);
 
   const [rightPanelTab, setRightPanelTab] = useState<'editor' | 'preview'>('editor');
@@ -175,8 +170,6 @@ export default function IndexPage() {
         {!chatCollapsed && (
           <div className="w-[35%] min-w-[280px] max-w-[420px]">
             <ChatPanel
-              conversationId={conversationId}
-              onConversationSaved={handleConversationSaved}
               onCodeGenerated={handleCodeGenerated}
               isLoggedIn={isLoggedIn}
             />
