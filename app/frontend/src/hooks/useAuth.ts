@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import client from '@/lib/client';
+import { authApi } from '@/lib/auth';
 
 interface User {
   id: string;
@@ -15,9 +15,9 @@ export function useAuth() {
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const response = await client.auth.me();
-        if (response?.data) {
-          setUser(response.data as User);
+        const userData = await authApi.getCurrentUser();
+        if (userData) {
+          setUser(userData as User);
         } else {
           setUser(null);
         }
@@ -31,11 +31,11 @@ export function useAuth() {
   }, []);
 
   const login = useCallback(() => {
-    client.auth.toLogin();
+    authApi.login();
   }, []);
 
   const logout = useCallback(async () => {
-    await client.auth.logout();
+    await authApi.logout();
     setUser(null);
   }, []);
 

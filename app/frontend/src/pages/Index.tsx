@@ -109,12 +109,12 @@ export default function IndexPage() {
     setCurrentProject(project);
   }, []);
 
-  const [rightPanelTab, setRightPanelTab] = useState<'editor' | 'preview'>('editor');
+  const [rightPanelTab, setRightPanelTab] = useState<'preview' | 'editor'>('preview');
 
   const handleCodeGenerated = useCallback((files: GeneratedFile[], html: string) => {
     setGeneratedFiles(files);
     setPreviewHtml(html);
-    setRightPanelTab('editor');
+    setRightPanelTab('preview');
   }, []);
 
   return (
@@ -258,16 +258,6 @@ export default function IndexPage() {
           {/* Tab Header */}
           <div className="flex items-center gap-1 px-3 py-1.5 bg-[#0f0f23] border-b border-border">
             <button
-              onClick={() => setRightPanelTab('editor')}
-              className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
-                rightPanelTab === 'editor'
-                  ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-[#1a1a2e]'
-              }`}
-            >
-              编辑器
-            </button>
-            <button
               onClick={() => setRightPanelTab('preview')}
               className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
                 rightPanelTab === 'preview'
@@ -277,17 +267,27 @@ export default function IndexPage() {
             >
               预览
             </button>
+            <button
+              onClick={() => setRightPanelTab('editor')}
+              className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                rightPanelTab === 'editor'
+                  ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-[#1a1a2e]'
+              }`}
+            >
+              编辑器
+            </button>
           </div>
 
           {/* Tab Content */}
           <div className="flex-1 min-h-0">
-            {rightPanelTab === 'editor' ? (
-              <CodeEditor files={generatedFiles} />
-            ) : (
+            {rightPanelTab === 'preview' ? (
               <PreviewPanel
                 hasContent={!!previewHtml}
                 htmlContent={previewHtml}
               />
+            ) : (
+              <CodeEditor files={generatedFiles} />
             )}
           </div>
         </div>

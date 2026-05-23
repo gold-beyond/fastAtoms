@@ -325,6 +325,9 @@ export default function ChatPanel({
     setIsTyping(true);
     abortRef.current = false;
 
+    // Save conversation immediately when user sends a message
+    saveConversation(updatedMessages);
+
     const assistantId = (Date.now() + 1).toString();
 
     // Build messages for the AI API (include conversation history)
@@ -388,6 +391,7 @@ export default function ChatPanel({
         ];
         setMessages(errorMessages);
         setIsTyping(false);
+        saveConversation(errorMessages);
       }
     } else {
       // Use built-in Atoms AI (streaming)
@@ -444,6 +448,7 @@ export default function ChatPanel({
             ];
             setMessages(errorMessages);
             setIsTyping(false);
+            saveConversation(errorMessages);
           },
           timeout: 60_000,
         });
@@ -463,6 +468,7 @@ export default function ChatPanel({
           ];
           setMessages(errorMessages);
           setIsTyping(false);
+          saveConversation(errorMessages);
         }
       }
     }
