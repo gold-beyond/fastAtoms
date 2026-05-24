@@ -11,6 +11,7 @@ import { api } from '@/lib/simpleApi';
 import { getLocalConversations, saveLocalConversations } from '@/lib/conversationUtils';
 import Markdown from 'markdown-to-jsx';
 import PlanReview, { PlanTask } from '@/components/PlanReview';
+import client from '@/lib/client';
 
 interface Message {
   id: string;
@@ -942,19 +943,50 @@ export default function ChatPanel({
           abortControllerRef.current?.signal,
         );
       } else if (effectiveAgentId) {
-        await api.postStream(
-          '/api/v1/agents/chat/stream',
-          { agent_id: effectiveAgentId, messages: apiMessages },
-          { onToken: handleStreamToken, onDone: handleStreamDone, onError: handleStreamError },
-          abortControllerRef.current?.signal,
-        );
+        const agentInfo = agentsMapRef.current[effectiveAgentId];
+        const agentSystemPrompt = agentInfo
+          ? `你是 ${agentInfo.name}，${agentInfo.description || 'Atoms 平台的 AI 助手'}。${SYSTEM_PROMPT}`
+          : SYSTEM_PROMPT;
+        const agentMessages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
+          { role: 'system', content: agentSystemPrompt },
+          ...updatedMessages.map((m) => ({
+            role: m.role as 'user' | 'assistant',
+            content: m.content,
+          })),
+        ];
+        await client.ai.gentxt({
+          messages: agentMessages,
+          model: 'deepseek-v3.2',
+          stream: true,
+          onChunk: (chunk: { content?: string }) => {
+            if (abortRef.current) return;
+            handleStreamToken(chunk.content || '');
+          },
+          onComplete: () => {
+            handleStreamDone({ agent_id: effectiveAgentId });
+          },
+          onError: (error: { message?: string }) => {
+            handleStreamError(error.message || 'AI 请求失败');
+          },
+          timeout: 60_000,
+        });
       } else {
-        await api.postStream(
-          '/api/v1/chat/proxy/stream',
-          { messages: apiMessages, model: 'deepseek-chat' },
-          { onToken: handleStreamToken, onDone: handleStreamDone, onError: handleStreamError },
-          abortControllerRef.current?.signal,
-        );
+        await client.ai.gentxt({
+          messages: apiMessages,
+          model: 'deepseek-v3.2',
+          stream: true,
+          onChunk: (chunk: { content?: string }) => {
+            if (abortRef.current) return;
+            handleStreamToken(chunk.content || '');
+          },
+          onComplete: () => {
+            handleStreamDone();
+          },
+          onError: (error: { message?: string }) => {
+            handleStreamError(error.message || 'AI 请求失败');
+          },
+          timeout: 60_000,
+        });
       }
     } catch (e: unknown) {
       if (!abortRef.current) {

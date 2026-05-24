@@ -4,6 +4,8 @@ import logging
 from typing import AsyncGenerator, List, Dict, Any, Optional
 
 from core.config import settings
+from services.aihub import AIHubService
+from schemas.aihub import GenTxtRequest, ChatMessage
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,7 @@ async def proxy_chat(
 ) -> str:
     """
     Proxy a chat completion request to an external AI provider.
+    Falls back to AIHubService (Atoms Cloud built-in AI) when no API key is available.
 
     Args:
         messages: List of message dicts with 'role' and 'content' keys.
@@ -55,8 +58,17 @@ async def proxy_chat(
     """
     provider = _resolve_provider(provider, model)
     resolved_api_key = _resolve_api_key(api_key, provider)
+
+    # Fallback to AIHubService when no external API key is available
     if not resolved_api_key:
-        raise ValueError(f"No API key configured for provider '{provider}'. Set {provider.upper()}_API_KEY environment variable.")
+        logger.info("No external API key found, falling back to AIHubService")
+        service = AIHubService()
+        request = GenTxtRequest(
+            messages=[ChatMessage(role=m["role"], content=m["content"]) for m in messages],
+            model="deepseek-v3.2",
+        )
+        response = await service.gentxt(request)
+        return response.content
 
     if provider in ("openai", "deepseek"):
         return await _call_openai_compatible(messages, model, resolved_api_key, provider)
@@ -144,12 +156,23 @@ async def proxy_chat_stream(
 ) -> AsyncGenerator[str, None]:
     """
     Stream a chat completion request to an external AI provider.
+    Falls back to AIHubService (Atoms Cloud built-in AI) when no API key is available.
     Yields tokens as they are received.
     """
     provider = _resolve_provider(provider, model)
     resolved_api_key = _resolve_api_key(api_key, provider)
+
+    # Fallback to AIHubService when no external API key is available
     if not resolved_api_key:
-        raise ValueError(f"No API key configured for provider '{provider}'.")
+        logger.info("No external API key found for streaming, falling back to AIHubService")
+        service = AIHubService()
+        request = GenTxtRequest(
+            messages=[ChatMessage(role=m["role"], content=m["content"]) for m in messages],
+            model="deepseek-v3.2",
+        )
+        async for chunk in service.gentxt_stream(request):
+            yield chunk
+        return
 
     if provider in ("openai", "deepseek"):
         async for token in _call_openai_compatible_stream(messages, model, resolved_api_key, provider):

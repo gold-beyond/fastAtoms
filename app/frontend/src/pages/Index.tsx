@@ -181,7 +181,7 @@ function AppContent({ user, loading, logout, navigate, publishOpen, setPublishOp
       if (isLoggedIn) {
         try {
           await api.del(`/api/v1/entities/conversations/${conv.id}`);
-        } catch {}
+        } catch { /* ignore delete errors */ }
       } else {
         deleteLocalConversation(conv.id);
       }
@@ -200,7 +200,7 @@ function AppContent({ user, loading, logout, navigate, publishOpen, setPublishOp
       if (isLoggedIn) {
         try {
           await api.put(`/api/v1/entities/conversations/${conv.id}`, { title: newTitle });
-        } catch {}
+        } catch { /* ignore rename errors */ }
       } else {
         renameLocalConversation(conv.id, newTitle);
       }
