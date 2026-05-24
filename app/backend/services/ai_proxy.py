@@ -8,10 +8,30 @@ from core.config import settings
 logger = logging.getLogger(__name__)
 
 
+# In-memory cache for shared API keys (set via UI, stored in DB)
+_shared_key_cache: Dict[str, str] = {}
+
+
+def set_shared_key_cache(provider: str, api_key: str) -> None:
+    """Update the in-memory cache (called by settings router after DB save)."""
+    _shared_key_cache[provider] = api_key
+
+
+def remove_shared_key_cache(provider: str) -> None:
+    """Remove a key from cache."""
+    _shared_key_cache.pop(provider, None)
+
+
 def _resolve_api_key(api_key: Optional[str], provider: Optional[str]) -> str:
-    """Resolve API key from request or environment variables."""
+    """Resolve API key from request, shared keys (cache), or environment variables."""
     if api_key:
         return api_key
+    # Check shared key cache (set by users via UI, stored in DB)
+    if provider:
+        shared = _shared_key_cache.get(provider)
+        if shared:
+            return shared
+    # Fall back to env settings
     if provider == "deepseek":
         return getattr(settings, "deepseek_api_key", "")
     elif provider == "openai":

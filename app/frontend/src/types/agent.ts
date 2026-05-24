@@ -62,7 +62,7 @@ export const DEFAULT_AGENTS: AgentDef[] = [
     name: 'Mike',
     role: 'Team Leader',
     avatarColor: 'from-orange-400 to-amber-500',
-    avatarUrl: '/avatars/mike.svg?v=3',
+    avatarUrl: '/avatars/mike.svg?v=13',
     systemPrompt: '',
     skills: ['任务分解', '团队协调', '需求分析'],
     isBuiltin: true,
