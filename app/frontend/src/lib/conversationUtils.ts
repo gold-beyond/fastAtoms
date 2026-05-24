@@ -9,7 +9,9 @@ export const LOCAL_STORAGE_KEY = 'atoms_local_conversations';
 
 export function formatRelativeTime(dateStr?: string): string {
   if (!dateStr) return '';
-  const date = new Date(dateStr);
+  // If the date string doesn't contain timezone info, treat it as UTC
+  const normalizedStr = /[Z+-]\d{2}:\d{2}$/.test(dateStr) ? dateStr : dateStr + 'Z';
+  const date = new Date(normalizedStr);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffMin = Math.floor(diffMs / 60000);

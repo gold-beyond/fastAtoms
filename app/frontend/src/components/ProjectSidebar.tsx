@@ -76,7 +76,7 @@ export default function ProjectSidebar({
   if (!visible) return null;
 
   return (
-    <div className="w-[220px] min-w-[220px] flex flex-col h-full bg-[#0a0a1a] border-r border-border">
+    <div className="w-[220px] min-w-[220px] flex flex-col h-full bg-[#F7F7F8] border-r border-border">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-3 border-b border-border">
         <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -97,7 +97,7 @@ export default function ProjectSidebar({
         <Button
           variant="outline"
           size="sm"
-          className="w-full text-xs border-dashed border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/10 hover:text-indigo-300"
+          className="w-full text-xs border-dashed border-primary/30 text-primary hover:bg-primary/10 hover:text-primary/80"
           onClick={handleCreateProject}
         >
           <Plus className="w-3.5 h-3.5 mr-1" />
@@ -124,8 +124,8 @@ export default function ProjectSidebar({
                 onClick={() => onSelectProject(project)}
                 className={`w-full text-left px-3 py-2 rounded-md text-xs transition-colors ${
                   currentProjectId === project.id
-                    ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
-                    : 'text-muted-foreground hover:bg-[#1a1a2e] hover:text-foreground'
+                    ? 'bg-primary/10 text-primary border border-primary/20'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 }`}
               >
                 <div className="font-medium truncate">{project.name}</div>

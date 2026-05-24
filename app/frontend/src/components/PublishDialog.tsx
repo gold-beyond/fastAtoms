@@ -48,10 +48,10 @@ export default function PublishDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-[#0f0f23] border-border text-foreground max-w-md">
+      <DialogContent className="bg-white border-border text-foreground max-w-md">
         <DialogHeader>
           <DialogTitle className="text-lg font-semibold flex items-center gap-2">
-            <Rocket className="w-5 h-5 text-indigo-400" />
+            <Rocket className="w-5 h-5 text-primary" />
             发布项目
           </DialogTitle>
         </DialogHeader>
@@ -62,7 +62,7 @@ export default function PublishDialog({
               <p className="text-sm text-muted-foreground">
                 将你的项目部署到全球 CDN，获得一个可分享的链接。
               </p>
-              <div className="bg-[#1a1a2e] rounded-lg p-4 border border-border">
+              <div className="bg-muted rounded-lg p-4 border border-border">
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-muted-foreground">项目</span>
                   <span className="text-foreground font-medium">
@@ -80,7 +80,7 @@ export default function PublishDialog({
               </div>
               <Button
                 onClick={handlePublish}
-                className="w-full bg-gradient-to-r from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 text-white border-0"
+                className="w-full bg-gradient-to-r from-primary to-accent hover:from-primary/90 hover:to-accent/90 text-white border-0"
               >
                 <Rocket className="w-4 h-4 mr-2" />
                 开始发布
@@ -91,7 +91,7 @@ export default function PublishDialog({
           {step === "building" && (
             <div className="space-y-4 fade-in-up">
               <div className="flex items-center gap-3">
-                <Loader2 className="w-5 h-5 text-indigo-400 animate-spin" />
+                <Loader2 className="w-5 h-5 text-primary animate-spin" />
                 <span className="text-sm font-medium">正在构建项目...</span>
               </div>
               <div className="space-y-2">
@@ -99,13 +99,13 @@ export default function PublishDialog({
                   <span>编译文件</span>
                   <span>进行中</span>
                 </div>
-                <div className="h-2 bg-[#1a1a2e] rounded-full overflow-hidden">
-                  <div className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full progress-fill" />
+                <div className="h-2 bg-muted rounded-full overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-primary to-accent rounded-full progress-fill" />
                 </div>
               </div>
-              <div className="bg-[#1a1a2e] rounded-lg p-3 font-mono text-xs text-muted-foreground space-y-1">
+              <div className="bg-muted rounded-lg p-3 font-mono text-xs text-muted-foreground space-y-1">
                 <p>
-                  <span className="text-green-400">✓</span> 解析 index.html
+                  <span className="text-emerald-600">✓</span> 解析 index.html
                 </p>
                 <p>
                   <span className="text-green-400">✓</span> 编译 styles.css
@@ -128,13 +128,13 @@ export default function PublishDialog({
                   <span>部署进度</span>
                   <span>分发中</span>
                 </div>
-                <div className="h-2 bg-[#1a1a2e] rounded-full overflow-hidden">
-                  <div className="h-full bg-gradient-to-r from-purple-500 to-pink-500 rounded-full progress-fill" />
+                <div className="h-2 bg-muted rounded-full overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-accent to-pink-500 rounded-full progress-fill" />
                 </div>
               </div>
               <div className="bg-[#1a1a2e] rounded-lg p-3 font-mono text-xs text-muted-foreground space-y-1">
                 <p>
-                  <span className="text-green-400">✓</span> 构建完成 (1.2s)
+                  <span className="text-emerald-600">✓</span> 构建完成 (1.2s)
                 </p>
                 <p>
                   <span className="text-green-400">✓</span> 上传资源文件
@@ -149,8 +149,8 @@ export default function PublishDialog({
           {step === "published" && (
             <div className="space-y-4 fade-in-up">
               <div className="flex flex-col items-center py-4">
-                <div className="w-12 h-12 rounded-full bg-green-500/20 flex items-center justify-center mb-3 pulse-glow">
-                  <Check className="w-6 h-6 text-green-400" />
+                <div className="w-12 h-12 rounded-full bg-emerald-500/20 flex items-center justify-center mb-3 pulse-glow">
+                  <Check className="w-6 h-6 text-emerald-600" />
                 </div>
                 <h3 className="text-base font-semibold text-foreground">
                   发布成功！🎉
@@ -172,7 +172,7 @@ export default function PublishDialog({
                     onClick={handleCopy}
                   >
                     {copied ? (
-                      <Check className="w-3.5 h-3.5 text-green-400" />
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
                     ) : (
                       <Copy className="w-3.5 h-3.5 text-muted-foreground" />
                     )}
@@ -186,7 +186,7 @@ export default function PublishDialog({
               <Button
                 onClick={() => onOpenChange(false)}
                 variant="outline"
-                className="w-full border-border text-foreground hover:bg-[#1a1a2e]"
+                className="w-full border-border text-foreground hover:bg-muted"
               >
                 完成
               </Button>

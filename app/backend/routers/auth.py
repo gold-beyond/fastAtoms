@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlencode
 
@@ -22,6 +23,8 @@ from fastapi.responses import RedirectResponse
 from models.auth import User
 from schemas.auth import (
     PlatformTokenExchangeRequest,
+    RegisterRequest,
+    RegisterResponse,
     SimpleLoginRequest,
     SimpleLoginResponse,
     TokenExchangeResponse,
@@ -328,19 +331,68 @@ async def login_simple(
     if not name or len(name) > 50:
         raise HTTPException(status_code=400, detail="Invalid name")
 
-    expected_hash = DEFAULT_ACCOUNT_HASHES.get(name)
-    if not expected_hash or not verify_password(password, expected_hash):
-        raise HTTPException(status_code=401, detail="用户名或密码错误")
-
     auth_service = AuthService(db)
-    user = await auth_service.get_or_create_user(
-        platform_sub=f"simple:{name}",
-        email=f"{name}@atoms.local",
-        name=name,
-    )
+
+    # Look up user by simple auth ID
+    from sqlalchemy import select as sa_select
+    from models.auth import User as UserModel
+
+    result = await db.execute(sa_select(UserModel).where(UserModel.id == f"simple:{name}"))
+    user = result.scalar_one_or_none()
+
+    if user and user.password_hash:
+        # DB-stored hash — verify against it
+        if not verify_password(password, user.password_hash):
+            raise HTTPException(status_code=401, detail="用户名或密码错误")
+        # Update last_login
+        user.last_login = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(user)
+    else:
+        # Fallback: check hardcoded hashes (legacy accounts)
+        expected_hash = DEFAULT_ACCOUNT_HASHES.get(name)
+        if not expected_hash or not verify_password(password, expected_hash):
+            raise HTTPException(status_code=401, detail="用户名或密码错误")
+        user = await auth_service.get_or_create_user(
+            platform_sub=f"simple:{name}",
+            email=f"{name}@atoms.local",
+            name=name,
+        )
 
     token, expires_at, _ = await auth_service.issue_app_token(user)
     return SimpleLoginResponse(
+        token=token,
+        expires_at=expires_at.isoformat(),
+        token_type="Bearer",
+        user=UserResponse(
+            id=user.id,
+            email=user.email,
+            name=user.name,
+            role=user.role,
+            last_login=user.last_login,
+        ),
+    )
+
+
+@router.post("/register", response_model=RegisterResponse)
+async def register(
+    request: RegisterRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Register a new user with username and password."""
+    name = request.name.strip()
+    password = request.password.strip()
+
+    if not name or len(name) > 50:
+        raise HTTPException(status_code=400, detail="用户名无效（1-50个字符）")
+    if not password or len(password) < 4:
+        raise HTTPException(status_code=400, detail="密码至少需要4个字符")
+
+    auth_service = AuthService(db)
+    user = await auth_service.register_user(name=name, password=password)
+
+    token, expires_at, _ = await auth_service.issue_app_token(user)
+    return RegisterResponse(
         token=token,
         expires_at=expires_at.isoformat(),
         token_type="Bearer",

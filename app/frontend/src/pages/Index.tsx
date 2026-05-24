@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import {
@@ -8,12 +8,14 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Rocket, PanelLeft, Code2, LogOut, FolderOpen, User } from 'lucide-react';
+import { AgentProvider, useAgentContext } from '@/contexts/AgentContext';
 import ChatPanel from '@/components/ChatPanel';
 import CodeEditor from '@/components/CodeEditor';
 import PreviewPanel from '@/components/PreviewPanel';
 import PublishDialog from '@/components/PublishDialog';
 import ProjectSidebar from '@/components/ProjectSidebar';
 import ConversationSidebar, { ConversationSidebarToggle } from '@/components/ConversationSidebar';
+import AgentBar from '@/components/AgentBar';
 import { useAuth } from '@/hooks/useAuth';
 import { api } from '@/lib/simpleApi';
 import { ConversationItem, getLocalConversations, saveLocalConversations, deleteLocalConversation, renameLocalConversation } from '@/lib/conversationUtils';
@@ -43,16 +45,45 @@ export default function IndexPage() {
   const { user, loading, logout } = useAuth();
   const navigate = useNavigate();
   const [publishOpen, setPublishOpen] = useState(false);
+
+  return (
+    <AgentProvider>
+      <AppContent
+        user={user}
+        loading={loading}
+        logout={logout}
+        navigate={navigate}
+        publishOpen={publishOpen}
+        setPublishOpen={setPublishOpen}
+      />
+    </AgentProvider>
+  );
+}
+
+interface AppContentProps {
+  user: ReturnType<typeof useAuth>['user'];
+  loading: boolean;
+  logout: () => void;
+  navigate: ReturnType<typeof useNavigate>;
+  publishOpen: boolean;
+  setPublishOpen: (v: boolean) => void;
+}
+
+function AppContent({ user, loading, logout, navigate, publishOpen, setPublishOpen }: AppContentProps) {
+  const { workMode } = useAgentContext();
   const [chatCollapsed, setChatCollapsed] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(false);
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
   const [generatedFiles, setGeneratedFiles] = useState<GeneratedFile[]>([]);
   const [previewHtml, setPreviewHtml] = useState<string>('');
 
-  // Conversation state (lifted from ChatPanel)
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
-  const [currentConvId, setCurrentConvId] = useState<string | null>(null);
+  // Restore active conversation from sessionStorage (survives page refresh)
+  const [currentConvId, setCurrentConvId] = useState<string | null>(
+    () => sessionStorage.getItem('atoms_current_conv') || null
+  );
   const [convSidebarCollapsed, setConvSidebarCollapsed] = useState(false);
+  const [agentBarVisible, setAgentBarVisible] = useState(false);
 
   const isLoggedIn = !!user;
 
@@ -104,22 +135,22 @@ export default function IndexPage() {
     }
   }, [isLoggedIn]);
 
-  // Load conversation list only after auth has settled
   useEffect(() => {
     if (loading) return;
     loadConversationList();
   }, [loadConversationList, loading]);
 
 
-
   const handleSelectConversation = useCallback((conv: ConversationItem) => {
     setCurrentConvId(conv.id);
+    sessionStorage.setItem('atoms_current_conv', conv.id);
     setGeneratedFiles([]);
     setPreviewHtml('');
   }, []);
 
   const handleNewConversation = useCallback(() => {
     setCurrentConvId(null);
+    sessionStorage.removeItem('atoms_current_conv');
     setGeneratedFiles([]);
     setPreviewHtml('');
   }, []);
@@ -132,6 +163,12 @@ export default function IndexPage() {
   );
 
   const handleCurrentConvIdChange = useCallback((id: string | null) => {
+    // Persist to sessionStorage so it survives page refresh
+    if (id) {
+      sessionStorage.setItem('atoms_current_conv', id);
+    } else {
+      sessionStorage.removeItem('atoms_current_conv');
+    }
     setCurrentConvId(id);
   }, []);
 
@@ -173,43 +210,97 @@ export default function IndexPage() {
   );
 
   const [rightPanelTab, setRightPanelTab] = useState<'preview' | 'editor'>('preview');
+  const [chatWidth, setChatWidth] = useState(35);
+  const [sidebarWidth, setSidebarWidth] = useState(224);
+  const chatWidthRef = useRef(35);
+  const sidebarWidthRef = useRef(224);
+  const sidebarCollapsedRef = useRef(false);
+  const resizing = useRef<string | false>(false);
+
+  // Sync state → refs for resize handlers
+  useEffect(() => { chatWidthRef.current = chatWidth; }, [chatWidth]);
+  useEffect(() => { sidebarWidthRef.current = sidebarWidth; }, [sidebarWidth]);
+  useEffect(() => { sidebarCollapsedRef.current = convSidebarCollapsed; }, [convSidebarCollapsed]);
+
+  const handleResizeStart = useCallback((e: React.MouseEvent, target: 'sidebar' | 'chat') => {
+    e.preventDefault();
+    resizing.current = target;
+    const startX = e.clientX;
+    const startSidebarW = sidebarWidthRef.current;
+
+    const onMove = (ev: MouseEvent) => {
+      if (!resizing.current) return;
+      if (resizing.current === 'sidebar') {
+        setSidebarWidth(Math.max(160, Math.min(400, ev.clientX - startX + startSidebarW)));
+      } else {
+        const container = document.querySelector('.main-content');
+        if (!container) return;
+        const rect = container.getBoundingClientRect();
+        // Use actual sidebar width: 0 if collapsed
+        const isCollapsed = sidebarCollapsedRef.current;
+        const sw = isCollapsed ? 0 : sidebarWidthRef.current;
+        const sidebarOffset = sw + (isCollapsed ? 0 : 6);
+        const availableWidth = rect.width - sidebarOffset;
+        const pct = ((ev.clientX - rect.left - sidebarOffset) / availableWidth) * 100;
+        setChatWidth(Math.max(20, Math.min(70, pct)));
+      }
+    };
+
+    const onUp = () => {
+      resizing.current = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, []);
 
   const handleCodeGenerated = useCallback((files: GeneratedFile[], html: string) => {
-    setGeneratedFiles(files);
-    setPreviewHtml(html);
-    setRightPanelTab('preview');
+    // Merge new files with existing ones, replacing by filename to avoid duplicates
+    setGeneratedFiles((prev) => {
+      const existing = new Map(prev.map((f) => [f.name, f]));
+      for (const f of files) existing.set(f.name, f);
+      return Array.from(existing.values());
+    });
+    if (html) setPreviewHtml(html);
+    if (html) setRightPanelTab('preview');
   }, []);
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden bg-[#0a0a1a]">
-      {/* Top Navigation Bar */}
-      <header className="flex items-center justify-between px-4 py-2 bg-[#0f0f23] border-b border-border z-10">
+    <div className="h-screen flex flex-col overflow-hidden bg-background">
+      <header className="flex items-center justify-between px-4 py-2 bg-background border-b border-border z-10">
         <div className="flex items-center gap-3">
           <img
             src={LOGO_URL}
             alt="Atoms Logo"
             className="w-7 h-7 rounded"
           />
-          <span className="text-sm font-semibold bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">
+          <span className="text-sm font-semibold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
             Atoms
           </span>
-          <span className="text-xs text-muted-foreground px-2 py-0.5 bg-[#1a1a2e] rounded border border-border">
+          <span className="text-xs text-muted-foreground px-2 py-0.5 bg-muted rounded border border-border">
             {currentProject?.name || '现代化 Landing Page'}
           </span>
         </div>
 
         <div className="flex items-center gap-2">
-          {isLoggedIn && (
+          <div className="relative">
             <Button
               variant="ghost"
               size="sm"
               className="text-muted-foreground hover:text-foreground"
-              onClick={() => setSidebarVisible(!sidebarVisible)}
+              onClick={() => setAgentBarVisible(!agentBarVisible)}
             >
-              <FolderOpen className="w-4 h-4 mr-1" />
-              <span className="text-xs">项目</span>
+              <PanelLeft className="w-4 h-4 mr-1" />
+              <span className="text-xs">团队</span>
             </Button>
-          )}
+            <AgentBar visible={agentBarVisible} onClose={() => setAgentBarVisible(false)} />
+          </div>
           <Button
             variant="ghost"
             size="sm"
@@ -230,29 +321,28 @@ export default function IndexPage() {
           <Button
             onClick={() => setPublishOpen(true)}
             size="sm"
-            className="bg-gradient-to-r from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 text-white border-0 text-xs"
+            className="bg-gradient-to-r from-primary to-accent hover:from-primary/90 hover:to-accent/90 text-white border-0 text-xs"
           >
             <Rocket className="w-3.5 h-3.5 mr-1" />
             发布
           </Button>
 
-          {/* User Avatar / Login */}
           {loading ? (
-            <div className="w-8 h-8 rounded-full bg-[#1a1a2e] animate-pulse" />
+            <div className="w-8 h-8 rounded-full bg-muted animate-pulse" />
           ) : isLoggedIn ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600"
+                  className="w-8 h-8 rounded-full bg-gradient-to-br from-primary to-accent hover:from-primary/90 hover:to-accent/90"
                 >
                   <User className="w-4 h-4 text-white" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent
                 align="end"
-                className="bg-[#1a1a2e] border-border"
+                className="bg-popover border-border"
               >
                 <DropdownMenuItem
                   onClick={logout}
@@ -268,7 +358,7 @@ export default function IndexPage() {
               variant="ghost"
               size="sm"
               onClick={() => navigate('/login')}
-              className="text-indigo-400 hover:text-indigo-300 text-xs"
+              className="text-primary hover:text-primary/80 text-xs"
             >
               登录
             </Button>
@@ -276,9 +366,7 @@ export default function IndexPage() {
         </div>
       </header>
 
-      {/* Main Content */}
-      <div className="flex-1 flex overflow-hidden relative">
-        {/* Project Sidebar */}
+      <div className="flex-1 flex overflow-hidden relative main-content">
         {isLoggedIn && (
           <ProjectSidebar
             visible={sidebarVisible}
@@ -288,47 +376,60 @@ export default function IndexPage() {
           />
         )}
 
-        {/* Conversation Sidebar - Always present */}
-        <ConversationSidebar
-          conversations={conversations}
-          currentConvId={currentConvId}
-          onSelectConversation={handleSelectConversation}
-          onNewConversation={handleNewConversation}
-          onDeleteConversation={handleDeleteConversation}
-          onRenameConversation={handleRenameConversation}
-          collapsed={convSidebarCollapsed}
-          onToggleCollapse={() => setConvSidebarCollapsed(true)}
-        />
+        <div style={{ width: convSidebarCollapsed ? 0 : sidebarWidth, minWidth: convSidebarCollapsed ? 0 : 160, overflow: convSidebarCollapsed ? 'hidden' : 'visible' }} className="flex-shrink-0">
+          <ConversationSidebar
+            conversations={conversations}
+            currentConvId={currentConvId}
+            onSelectConversation={handleSelectConversation}
+            onNewConversation={handleNewConversation}
+            onDeleteConversation={handleDeleteConversation}
+            onRenameConversation={handleRenameConversation}
+            collapsed={convSidebarCollapsed}
+            onToggleCollapse={() => setConvSidebarCollapsed(true)}
+          />
+        </div>
+        {!convSidebarCollapsed && (
+          <div
+            className="w-[5px] cursor-col-resize flex-shrink-0 relative group"
+            onMouseDown={(e) => handleResizeStart(e, 'sidebar')}
+          >
+            <div className="absolute inset-y-0 left-1/2 -translate-x-px w-px bg-border group-hover:bg-foreground/50" />
+          </div>
+        )}
 
-        {/* Expand toggle when sidebar is collapsed */}
         {convSidebarCollapsed && (
           <ConversationSidebarToggle onClick={() => setConvSidebarCollapsed(false)} />
         )}
 
-        {/* Chat Panel */}
         {!chatCollapsed && (
-          <div className="w-[35%] min-w-[280px] max-w-[420px]">
-            <ChatPanel
-              onCodeGenerated={handleCodeGenerated}
-              isLoggedIn={isLoggedIn}
-              currentConvId={currentConvId}
-              onCodeRestored={handleCodeGenerated}
-              onCurrentConvIdChange={handleCurrentConvIdChange}
-              onConversationSaved={handleConversationSaved}
-            />
-          </div>
+          <>
+            <div style={{ width: `${chatWidth}%`, minWidth: 280 }}>
+              <ChatPanel
+                onCodeGenerated={handleCodeGenerated}
+                isLoggedIn={isLoggedIn}
+                currentConvId={currentConvId}
+                onCodeRestored={handleCodeGenerated}
+                onCurrentConvIdChange={handleCurrentConvIdChange}
+                onConversationSaved={handleConversationSaved}
+              />
+            </div>
+            <div
+              className="w-[5px] cursor-col-resize flex-shrink-0 relative group"
+              onMouseDown={(e) => handleResizeStart(e, 'chat')}
+            >
+              <div className="absolute inset-y-0 left-1/2 -translate-x-px w-px bg-border group-hover:bg-foreground/50 transition-colors" />
+            </div>
+          </>
         )}
 
-        {/* Right Panel - Tabbed Editor/Preview */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Tab Header */}
-          <div className="flex items-center gap-1 px-3 py-1.5 bg-[#0f0f23] border-b border-border">
+          <div className="flex items-center gap-1 px-3 py-1.5 bg-muted border-b border-border">
             <button
               onClick={() => setRightPanelTab('preview')}
               className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
                 rightPanelTab === 'preview'
-                  ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-[#1a1a2e]'
+                  ? 'bg-primary/10 text-primary border border-primary/20'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-muted'
               }`}
             >
               预览
@@ -337,15 +438,14 @@ export default function IndexPage() {
               onClick={() => setRightPanelTab('editor')}
               className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
                 rightPanelTab === 'editor'
-                  ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-[#1a1a2e]'
+                  ? 'bg-primary/10 text-primary border border-primary/20'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-muted'
               }`}
             >
               编辑器
             </button>
           </div>
 
-          {/* Tab Content */}
           <div className="flex-1 min-h-0">
             {rightPanelTab === 'preview' ? (
               <PreviewPanel
@@ -359,7 +459,6 @@ export default function IndexPage() {
         </div>
       </div>
 
-      {/* Publish Dialog */}
       <PublishDialog open={publishOpen} onOpenChange={setPublishOpen} />
     </div>
   );

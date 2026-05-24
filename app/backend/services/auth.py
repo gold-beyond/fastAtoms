@@ -7,6 +7,8 @@ from typing import Any, Dict, Optional, Tuple
 from core.auth import create_access_token
 from core.config import settings
 from core.database import db_manager
+from core.password import hash_password
+from fastapi import HTTPException, status
 from models.auth import OIDCState, User
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,6 +44,29 @@ class AuthService:
         await self.db.commit()
         await self.db.refresh(user)
         logger.debug(f"[DB_OP] User commit/refresh completed in {time.time() - start_time_commit:.4f}s")
+        return user
+
+    async def register_user(self, name: str, password: str) -> User:
+        """Register a new user with username and password.
+
+        Creates a user with id ``simple:{name}`` and stores the bcrypt-hashed password.
+        Raises 409 if the username is already taken.
+        """
+        platform_sub = f"simple:{name}"
+        result = await self.db.execute(select(User).where(User.id == platform_sub))
+        if result.scalar_one_or_none():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="用户名已存在")
+
+        user = User(
+            id=platform_sub,
+            email=f"{name}@atoms.local",
+            name=name,
+            password_hash=hash_password(password),
+            last_login=datetime.now(timezone.utc),
+        )
+        self.db.add(user)
+        await self.db.commit()
+        await self.db.refresh(user)
         return user
 
     async def issue_app_token(

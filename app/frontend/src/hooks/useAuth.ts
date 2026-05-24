@@ -36,10 +36,16 @@ export function useAuth() {
     setUser(data.user);
   }, []);
 
+  const register = useCallback(async (name: string, password: string) => {
+    const data = await api.post<any>('/api/v1/auth/register', { name, password });
+    localStorage.setItem(TOKEN_KEY, data.token);
+    setUser(data.user);
+  }, []);
+
   const logout = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
     setUser(null);
   }, []);
 
-  return { user, loading, login, logout };
+  return { user, loading, login, register, logout };
 }

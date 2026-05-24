@@ -16,9 +16,9 @@ export default function PreviewPanel({ hasContent = false, htmlContent }: Previe
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#0d0d1a] rounded-bl-lg overflow-hidden border-t border-border">
+    <div className="flex flex-col h-full bg-[#F8F9FA] rounded-bl-lg overflow-hidden border-t border-border">
       {/* Preview Header */}
-      <div className="flex items-center justify-between px-3 py-2 bg-[#0f0f23] border-b border-border">
+      <div className="flex items-center justify-between px-3 py-2 bg-white border-b border-border">
         <div className="flex items-center gap-2">
           <div className="flex gap-1">
             <div className="w-2.5 h-2.5 rounded-full bg-red-500/70" />
@@ -36,7 +36,7 @@ export default function PreviewPanel({ hasContent = false, htmlContent }: Previe
             onClick={() => setViewMode("desktop")}
           >
             <Monitor
-              className={`w-3.5 h-3.5 ${viewMode === "desktop" ? "text-indigo-400" : "text-muted-foreground"}`}
+              className={`w-3.5 h-3.5 ${viewMode === "desktop" ? "text-primary" : "text-muted-foreground"}`}
             />
           </Button>
           <Button
@@ -46,7 +46,7 @@ export default function PreviewPanel({ hasContent = false, htmlContent }: Previe
             onClick={() => setViewMode("mobile")}
           >
             <Smartphone
-              className={`w-3.5 h-3.5 ${viewMode === "mobile" ? "text-indigo-400" : "text-muted-foreground"}`}
+              className={`w-3.5 h-3.5 ${viewMode === "mobile" ? "text-primary" : "text-muted-foreground"}`}
             />
           </Button>
           <Button
@@ -57,14 +57,6 @@ export default function PreviewPanel({ hasContent = false, htmlContent }: Previe
           >
             <RotateCw className="w-3.5 h-3.5 text-muted-foreground" />
           </Button>
-        </div>
-      </div>
-
-      {/* URL Bar */}
-      <div className="px-3 py-1.5 bg-[#12122a] border-b border-border">
-        <div className="flex items-center gap-2 px-2 py-1 bg-[#0f0f23] rounded text-xs text-muted-foreground">
-          <span className="text-green-400">🔒</span>
-          <span>localhost:3000</span>
         </div>
       </div>
 

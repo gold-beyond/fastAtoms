@@ -23,10 +23,10 @@ export default function CodeEditor({ files }: CodeEditorProps) {
   // If no files, show empty state
   if (currentFiles.length === 0) {
     return (
-      <div className="flex flex-col h-full bg-[#0d0d1a] rounded-tl-lg overflow-hidden">
+      <div className="flex flex-col h-full bg-[#F8F9FA] rounded-tl-lg overflow-hidden">
         {/* Empty Tab Bar */}
-        <div className="flex items-center bg-[#0f0f23] border-b border-border h-9">
-          <div className="flex-1 bg-[#0f0f23]" />
+        <div className="flex items-center bg-white border-b border-border h-9">
+          <div className="flex-1 bg-white" />
         </div>
 
         {/* Empty State */}
@@ -41,17 +41,17 @@ export default function CodeEditor({ files }: CodeEditorProps) {
   const lines = activeFile.code.split("\n");
 
   return (
-    <div className="flex flex-col h-full bg-[#0d0d1a] rounded-tl-lg overflow-hidden">
+    <div className="flex flex-col h-full bg-[#F8F9FA] rounded-tl-lg overflow-hidden">
       {/* File Tabs */}
-      <div className="flex items-center bg-[#0f0f23] border-b border-border overflow-x-auto">
+      <div className="flex items-center bg-white border-b border-border overflow-x-auto">
         {currentFiles.map((file) => (
           <button
             key={file.id}
             onClick={() => setActiveTab(file.id)}
             className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-r border-border transition-colors whitespace-nowrap ${
               (activeTab === file.id || (!activeTab && file.id === currentFiles[0]?.id))
-                ? "bg-[#0d0d1a] text-foreground border-b-2 border-b-indigo-500"
-                : "text-muted-foreground hover:text-foreground hover:bg-[#1a1a2e]"
+                ? "bg-[#F8F9FA] text-foreground border-b-2 border-b-primary"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
             }`}
           >
             {file.icon}
@@ -97,7 +97,7 @@ function highlightCode(line: string, language: string): React.ReactNode {
 }
 
 function highlightHTML(line: string): React.ReactNode {
-  // Highlight HTML tags and attributes
+  // Highlight HTML tags and attributes - Light theme
   const parts: React.ReactNode[] = [];
   const remaining = line;
   let key = 0;
@@ -109,13 +109,13 @@ function highlightHTML(line: string): React.ReactNode {
   while ((match = tagRegex.exec(remaining)) !== null) {
     if (match.index > lastIndex) {
       parts.push(
-        <span key={key++} className="text-foreground/80">
+        <span key={key++} className="text-gray-700">
           {remaining.slice(lastIndex, match.index)}
         </span>
       );
     }
     parts.push(
-      <span key={key++} className="text-pink-400">
+      <span key={key++} className="text-red-600">
         {match[0]}
       </span>
     );
@@ -124,7 +124,7 @@ function highlightHTML(line: string): React.ReactNode {
 
   if (lastIndex < remaining.length) {
     parts.push(
-      <span key={key++} className="text-foreground/80">
+      <span key={key++} className="text-gray-700">
         {remaining.slice(lastIndex)}
       </span>
     );
@@ -135,27 +135,27 @@ function highlightHTML(line: string): React.ReactNode {
 
 function highlightCSS(line: string): React.ReactNode {
   if (line.includes("{") || line.includes("}")) {
-    return <span className="text-yellow-300">{line}</span>;
+    return <span className="text-amber-600">{line}</span>;
   }
   if (line.includes(":") && !line.includes("//")) {
     const colonIndex = line.indexOf(":");
     return (
       <>
-        <span className="text-cyan-300">{line.slice(0, colonIndex)}</span>
-        <span className="text-foreground/60">:</span>
-        <span className="text-orange-300">{line.slice(colonIndex + 1)}</span>
+        <span className="text-amber-600">{line.slice(0, colonIndex)}</span>
+        <span className="text-gray-500">:</span>
+        <span className="text-emerald-600">{line.slice(colonIndex + 1)}</span>
       </>
     );
   }
   if (line.trim().startsWith("/*") || line.trim().startsWith("*")) {
-    return <span className="text-muted-foreground/60">{line}</span>;
+    return <span className="text-gray-400">{line}</span>;
   }
-  return <span className="text-foreground/80">{line}</span>;
+  return <span className="text-gray-700">{line}</span>;
 }
 
 function highlightJS(line: string): React.ReactNode {
   if (line.trim().startsWith("//")) {
-    return <span className="text-muted-foreground/60">{line}</span>;
+    return <span className="text-gray-400">{line}</span>;
   }
 
   const result = line;
@@ -163,33 +163,33 @@ function highlightJS(line: string): React.ReactNode {
   let lastIdx = 0;
   let key = 0;
 
-  // Simple keyword highlight
+  // Simple keyword highlight - Light theme
   const combined = /(\b(?:const|let|var|function|if|else|return|new|this)\b)|(\b(?:document|window|console)\b)|(['"`].*?['"`])/g;
   let m;
 
   while ((m = combined.exec(result)) !== null) {
     if (m.index > lastIdx) {
       parts.push(
-        <span key={key++} className="text-foreground/80">
+        <span key={key++} className="text-gray-700">
           {result.slice(lastIdx, m.index)}
         </span>
       );
     }
     if (m[1]) {
       parts.push(
-        <span key={key++} className="text-purple-400">
+        <span key={key++} className="text-purple-600">
           {m[0]}
         </span>
       );
     } else if (m[2]) {
       parts.push(
-        <span key={key++} className="text-cyan-300">
+        <span key={key++} className="text-blue-600">
           {m[0]}
         </span>
       );
     } else if (m[3]) {
       parts.push(
-        <span key={key++} className="text-green-300">
+        <span key={key++} className="text-emerald-600">
           {m[0]}
         </span>
       );
@@ -199,7 +199,7 @@ function highlightJS(line: string): React.ReactNode {
 
   if (lastIdx < result.length) {
     parts.push(
-      <span key={key++} className="text-foreground/80">
+      <span key={key++} className="text-gray-700">
         {result.slice(lastIdx)}
       </span>
     );
