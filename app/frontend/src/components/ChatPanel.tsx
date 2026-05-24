@@ -3,14 +3,25 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Send, Bot, User, FileCode, FileText, Braces, Square } from 'lucide-react';
+import { useAgentContext } from '@/contexts/AgentContext';
+import AgentMessageBubble from '@/components/AgentMessageBubble';
+import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
+import { AgentDef } from '@/types/agent';
 import { api } from '@/lib/simpleApi';
 import { getLocalConversations, saveLocalConversations } from '@/lib/conversationUtils';
+import Markdown from 'markdown-to-jsx';
+import PlanReview, { PlanTask } from '@/components/PlanReview';
 
 interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   displayContent?: string;
+  agentId?: string;
+  mentionedAgents?: string[];
+  taskId?: number;
+  taskTitle?: string;
+  timestamp?: string;
 }
 
 interface GeneratedFile {
@@ -35,7 +46,7 @@ const SYSTEM_PROMPT =
   '你是 Atoms 平台的 AI 编程助手。你可以帮助用户生成代码、解答编程问题、设计网页和应用。当用户要求你创建网页或应用时，请生成完整的 HTML、CSS 和 JavaScript 代码，使用 markdown 代码块包裹（```html、```css、```javascript）。请用中文回复。';
 
 const SUGGESTED_PROMPTS = [
-  '创建一个现代化的 Landing Page',
+  '开发一个贪吃蛇小游戏',
   '设计一个电商产品展示页',
   '构建一个数据可视化仪表盘',
   '开发一个任务管理应用',
@@ -74,6 +85,18 @@ function getFileName(language: string): string {
   }
 }
 
+function sanitizeDisplayContent(raw: string): string {
+  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
+  const markerCount = (raw.match(/```/g) || []).length;
+  let result = raw;
+  if (markerCount % 2 === 1) {
+    const lastIdx = result.lastIndexOf('```');
+    result = result.substring(0, lastIdx);
+  }
+  // Remove code blocks entirely — they're shown in the editor/preview panel, not the chat
+  return result.replace(codeBlockRegex, '');
+}
+
 function parseCodeBlocks(content: string): {
   files: GeneratedFile[];
   displayContent: string;
@@ -110,13 +133,8 @@ function parseCodeBlocks(content: string): {
     }
   }
 
-  // Build display content: replace code blocks with short notes
-  const displayContent = content.replace(codeBlockRegex, (_fullMatch, lang: string) => {
-    const fileName = getFileName(lang.toLowerCase() || 'text');
-    return `\n📄 ${fileName} 已生成 →\n`;
-  });
+  const displayContent = sanitizeDisplayContent(content);
 
-  // Build full HTML for preview
   let fullHtml = '';
   if (files.length > 0) {
     if (htmlCode) {
@@ -159,21 +177,47 @@ ${jsCode ? `<script>\n${jsCode}\n</script>` : ''}
     }
   }
 
+  // Fallback for non-HTML/CSS/JS files (markdown, json, etc.)
+  if (!fullHtml && files.length > 0) {
+    const bodies = files.map((f) => {
+      if (f.language === 'markdown' || f.name.endsWith('.md')) {
+        // Simple Markdown → HTML conversion for preview
+        const html = f.code
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+          .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+          .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+          .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+          .replace(/\*(.+?)\*/g, '<em>$1</em>')
+          .replace(/`([^`]+)`/g, '<code>$1</code>')
+          .replace(/^- (.+)$/gm, '<li>$1</li>')
+          .replace(/\n\n/g, '</p><p>')
+          .replace(/\n/g, '<br>');
+        return `<div class="markdown">${html}</div>`;
+      }
+      return `<h3>${f.name}</h3><pre>${f.code}</pre>`;
+    }).join('\n');
+    fullHtml = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Preview</title>
+<style>body{font-family:sans-serif;padding:20px;color:#333;max-width:800px;margin:0 auto}
+.markdown h1{font-size:1.5em;border-bottom:1px solid #eee;padding-bottom:0.3em}
+.markdown h2{font-size:1.3em;border-bottom:1px solid #eee;padding-bottom:0.2em}
+.markdown code{background:#f5f5f5;padding:2px 6px;border-radius:3px;font-size:0.9em}
+.markdown li{margin:4px 0}
+pre{background:#f5f5f5;padding:12px;border-radius:6px;overflow:auto;font-size:0.9em}
+</style></head><body>${bodies}</body></html>`;
+  }
+
   return { files, displayContent, fullHtml };
 }
 
-/**
- * Returns display-friendly content for a message by stripping code blocks.
- */
-function getDisplayContent(msg: Message): string {
-  if (msg.displayContent) return msg.displayContent;
-  if (msg.role === 'user') return msg.content;
-  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
-  if (!codeBlockRegex.test(msg.content)) return msg.content;
-  return msg.content.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang: string) => {
-    const fileName = getFileName(lang.toLowerCase() || 'text');
-    return `\n📄 ${fileName} 已生成 →\n`;
-  });
+function formatTimestamp(): string {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  return `${month}-${day} ${hours}:${minutes}`;
 }
 
 export default function ChatPanel({
@@ -190,12 +234,15 @@ export default function ChatPanel({
   messagesRef.current = messages;
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [planData, setPlanData] = useState<{ analysis: string; tasks: PlanTask[] } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const prevConvIdRef = useRef<string | null>(null);
   const currentConvIdRef = useRef(currentConvId);
   currentConvIdRef.current = currentConvId;
+  const { workMode, activeAgentId, agents, setAgentStatus } = useAgentContext();
   const pendingStreamRef = useRef<{
     convId: string;
     assistantId: string;
@@ -203,6 +250,26 @@ export default function ChatPanel({
     baseMessages: Message[];
   } | null>(null);
   const requestConvIdRef = useRef<string | null>(null);
+  const agentsMapRef = useRef<Record<string, AgentDef>>({});
+  const completedAgents = useRef<Set<string>>(new Set());
+  const planExecutedRef = useRef(false);
+  const streamBuffers = useRef<Record<string, {
+    messages: Message[];
+    planData: typeof planData;
+    isTyping: boolean;
+    teamMessages: Record<string, string>;
+    timestamp: string;
+    completedAgents: string[];
+    planExecuted?: boolean;
+  }>>({});
+
+  useEffect(() => {
+    const map: Record<string, AgentDef> = {};
+    for (const a of agents) {
+      map[a.id] = a;
+    }
+    agentsMapRef.current = map;
+  }, [agents]);
 
   const abortGeneration = () => {
     abortRef.current = true;
@@ -213,7 +280,6 @@ export default function ChatPanel({
     setIsTyping(false);
   };
 
-  // Load conversation when currentConvId changes externally
   useEffect(() => {
     if (currentConvId === prevConvIdRef.current) return;
 
@@ -221,7 +287,14 @@ export default function ChatPanel({
     const abortController = new AbortController();
     const signal = abortController.signal;
 
-    if (prevId && messagesRef.current.length > 0) {
+    if (prevId !== null && streamBuffers.current[prevId]) {
+      const buf = streamBuffers.current[prevId];
+      buf.messages = messagesRef.current;
+      buf.isTyping = isTyping;
+      buf.planData = planData;
+      buf.completedAgents = Array.from(completedAgents.current);
+    }
+    if (prevId && messagesRef.current.length > 0 && !streamBuffers.current[prevId]) {
       const msgs = [...messagesRef.current];
       const pending = pendingStreamRef.current;
       if (!pending || pending.convId !== prevId) {
@@ -237,6 +310,22 @@ export default function ChatPanel({
     }
 
     prevConvIdRef.current = currentConvId;
+
+    let buf = currentConvId ? streamBuffers.current[currentConvId] : undefined;
+    // Fallback: search for any _exec_ buffer (new conversations that didn't have an ID at start)
+    if (!buf) {
+      const execKey = Object.keys(streamBuffers.current).find(k => k.startsWith('_exec_'));
+      if (execKey) buf = streamBuffers.current[execKey];
+    }
+    if (buf) {
+      setMessages(buf.messages);
+      setPlanData(buf.planData);
+      if (buf.isTyping) setIsTyping(true);
+      if (buf.completedAgents) completedAgents.current = new Set(buf.completedAgents);
+      return;
+    }
+
+    setPlanData(null);
 
     if (currentConvId === null) {
       setMessages([]);
@@ -267,14 +356,64 @@ export default function ChatPanel({
           const { files, fullHtml } = parseCodeBlocks(msgs[i].content);
           if (files.length > 0) {
             onCodeRestored(files, fullHtml);
+            return;  // Found the last message with code, restore and stop
           }
-          break;
         }
       }
     };
 
     const loadConversation = async () => {
       if (signal.aborted) return;
+
+      const tryRestorePlan = (data: any) => {
+        if (!signal.aborted && data?.plan && !data?.plan_executed) {
+          try {
+            const p = typeof data.plan === 'string' ? JSON.parse(data.plan) : data.plan;
+            if (p?.analysis && p?.tasks) {
+              setPlanData({ analysis: p.analysis, tasks: p.tasks });
+              planExecutedRef.current = false;
+            }
+          } catch { /* ignore */ }
+        }
+      };
+
+      const backupKey = `atoms_backup_${currentConvId}`;
+      try {
+        const backup = localStorage.getItem(backupKey);
+        if (backup) {
+          const parsed = JSON.parse(backup);
+          const { messages: msgStr, plan, plan_executed } = parsed;
+          if (msgStr) {
+            const msgs = JSON.parse(msgStr);
+            if (!signal.aborted && Array.isArray(msgs) && msgs.length > 0) {
+              setMessages(msgs);
+              restoreCodeFromMessages(msgs);
+              tryRestorePlan({ plan, plan_executed });
+              return;
+            }
+          }
+        }
+      } catch { /* ignore corrupt backup */ }
+
+      if (!currentConvId) {
+        try {
+          const latest = localStorage.getItem('atoms_backup_latest');
+          if (latest) {
+            const parsed = JSON.parse(latest);
+            const { messages: msgStr, plan, plan_executed } = parsed;
+            if (msgStr) {
+              const msgs = JSON.parse(msgStr);
+              if (!signal.aborted && Array.isArray(msgs) && msgs.length > 0) {
+                setMessages(msgs);
+                restoreCodeFromMessages(msgs);
+                tryRestorePlan({ plan, plan_executed });
+                return;
+              }
+            }
+          }
+        } catch { /* ignore */ }
+      }
+
       if (isLoggedIn) {
         try {
           const data = await api.get<any>(`/api/v1/entities/conversations/${currentConvId}`);
@@ -284,11 +423,10 @@ export default function ChatPanel({
             if (!signal.aborted) {
               setMessages(parsed);
               restoreCodeFromMessages(parsed);
+              tryRestorePlan(data);
             }
           }
-        } catch {
-          // Fall back silently
-        }
+        } catch { /* fall back silently */ }
       } else {
         const localConvs = getLocalConversations();
         const conv = localConvs.find((c) => c.id === currentConvId);
@@ -299,9 +437,7 @@ export default function ChatPanel({
               setMessages(parsed);
               restoreCodeFromMessages(parsed);
             }
-          } catch {
-            // ignore
-          }
+          } catch { /* ignore */ }
         }
       }
     };
@@ -315,23 +451,34 @@ export default function ChatPanel({
 
   const saveConversation = useCallback(
     async (msgs: Message[], convIdOverride?: string, silent?: boolean) => {
-      const targetConvId = convIdOverride ?? currentConvId;
+      const targetConvId = convIdOverride ?? currentConvIdRef.current;
       const saveMsgs = msgs.map((m) => ({
         id: m.id,
         role: m.role,
         content: m.content,
+        agentId: m.agentId,
+        taskTitle: m.taskTitle,
+        timestamp: m.timestamp,
       }));
       const messagesStr = JSON.stringify(saveMsgs);
       const title =
         msgs.find((m) => m.role === 'user')?.content.slice(0, 50) || '新对话';
+      const planPayload = planData ? { analysis: planData.analysis, tasks: planData.tasks } : null;
+
+      const backupKey = targetConvId ? `atoms_backup_${targetConvId}` : 'atoms_backup_pending';
+      try {
+        localStorage.setItem(backupKey, JSON.stringify({ title, messages: messagesStr, id: targetConvId, plan: planPayload, plan_executed: planExecutedRef.current }));
+      } catch { /* storage full — ignore */ }
 
       if (isLoggedIn) {
         try {
+          const saveBody: Record<string, any> = { title, messages: messagesStr, plan_executed: planExecutedRef.current };
+          if (planPayload) saveBody.plan = JSON.stringify(planPayload);
           if (targetConvId) {
-            await api.put(`/api/v1/entities/conversations/${targetConvId}`, { title, messages: messagesStr });
+            await api.put(`/api/v1/entities/conversations/${targetConvId}`, saveBody);
             if (!silent) onConversationSaved?.(targetConvId);
           } else {
-            const data = await api.post<any>('/api/v1/entities/conversations', { title, messages: messagesStr });
+            const data = await api.post<any>('/api/v1/entities/conversations', saveBody);
             if (data?.id) {
               const newId = String(data.id);
               prevConvIdRef.current = newId;
@@ -339,9 +486,7 @@ export default function ChatPanel({
               if (!silent) onConversationSaved?.(newId);
             }
           }
-        } catch {
-          // Silently handle save errors
-        }
+        } catch { /* silently handle save errors */ }
       } else {
         const localConvs = getLocalConversations();
         if (targetConvId) {
@@ -367,13 +512,11 @@ export default function ChatPanel({
         }
       }
     },
-    [isLoggedIn, currentConvId, onConversationSaved, onCurrentConvIdChange]
+    [isLoggedIn, currentConvId, onConversationSaved, onCurrentConvIdChange, planData]
   );
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
   const processAIResponse = useCallback(
@@ -410,13 +553,182 @@ export default function ChatPanel({
     });
   };
 
+  const handleTeamExecute = useCallback(async () => {
+    if (!planData || isTyping) return;
+    completedAgents.current.clear();
+    setIsTyping(true);
+    setPlanData(null);
+
+    // Ensure the conversation has a real ID before starting execution
+    // (so the stream buffer is keyed by the correct conversation ID)
+    const currentMsgs = messagesRef.current;
+    if (currentMsgs.length > 0) {
+      try {
+        localStorage.setItem('atoms_backup_latest', JSON.stringify({
+          title: currentMsgs.find((m) => m.role === 'user')?.content.slice(0, 50) || '新对话',
+          messages: JSON.stringify(currentMsgs.map(m => ({ id: m.id, role: m.role, content: m.content, agentId: m.agentId, taskTitle: m.taskTitle, timestamp: m.timestamp }))),
+          id: currentConvIdRef.current,
+        }));
+      } catch { /* ignore */ }
+      // Create the conversation before streaming starts so it has a real ID
+      await saveConversation(currentMsgs);
+    }
+
+    const execBaseId = Date.now().toString();
+    const execMessages: Record<string, string> = {};
+    const planTasks = planData.tasks || [];
+    const expectedAgents = new Set(planTasks.map((t: any) => t.agent_id));
+    const execConvId = currentConvIdRef.current || `_exec_${execBaseId}`;
+    streamBuffers.current[execConvId] = {
+      messages: messagesRef.current,
+      planData: null,
+      isTyping: true,
+      teamMessages: execMessages,
+      timestamp: formatTimestamp(),
+    };
+
+    await api.postStream(
+      '/api/v1/agents/team/execute/stream',
+      {
+        messages: messagesRef.current.filter((m) => m.role === 'user').map((m) => ({ role: 'user', content: m.content })),
+        plan: { tasks: planTasks.map((t) => ({ agent_id: t.agent_id, title: t.title, description: t.description })) },
+      },
+      {
+        onEvent: (event: Record<string, any>) => {
+          if (abortRef.current) return;
+          // Guard: only update UI if still on the same conversation
+          const isActiveConv = currentConvIdRef.current === execConvId;
+
+          switch (event.type) {
+            case 'phase':
+              setAgentStatus(event.agent_id || 'mike', 'thinking');
+              break;
+            case 'token': {
+              const agId: string = event.agent_id || 'mike';
+              const tId: number | undefined = event.task_id;
+              const key = tId ? `task${tId}` : agId;
+              execMessages[key] = (execMessages[key] || '') + (event.token || '');
+              if (isActiveConv) {
+                setMessages((prev) => {
+                  const u = [...prev];
+                  const idx = tId
+                    ? u.findIndex((m) => m.taskId === tId && m.role === 'assistant')
+                    : u.findIndex((m) => m.agentId === agId && m.id.startsWith(execBaseId));
+                  if (idx >= 0) u[idx] = { ...u[idx], content: execMessages[key] };
+                  if (streamBuffers.current[execConvId]) streamBuffers.current[execConvId].messages = u;
+                  return u;
+                });
+              } else if (streamBuffers.current[execConvId]) {
+                // Background: only update the buffer, not the UI
+                const buf = streamBuffers.current[execConvId];
+                const msgIdx = buf.messages.findIndex(
+                  (m: any) => tId ? m.taskId === tId : (m.agentId === agId && m.id.startsWith(execBaseId))
+                );
+                if (msgIdx >= 0) buf.messages[msgIdx] = { ...buf.messages[msgIdx], content: execMessages[key] };
+              }
+              break;
+            }
+            case 'task_start': {
+              setAgentStatus(event.agent_id, 'thinking');
+              const tId: number = event.task_id || Date.now();
+              execMessages[`task${tId}`] = '';
+              const msgId = `${execBaseId}-task${tId}`;
+              const newMsg = { id: msgId, role: 'assistant' as const, content: '', agentId: event.agent_id, taskTitle: event.title || '', taskId: tId, timestamp: formatTimestamp() };
+              if (isActiveConv) {
+                setMessages((prev) => {
+                  if (prev.some((m) => m.id === msgId)) return prev;
+                  const u = [...prev, newMsg];
+                  if (streamBuffers.current[execConvId]) streamBuffers.current[execConvId].messages = u;
+                  return u;
+                });
+              } else if (streamBuffers.current[execConvId]) {
+                const buf = streamBuffers.current[execConvId];
+                if (!buf.messages.some((m: any) => m.id === msgId)) buf.messages.push(newMsg);
+              }
+              break;
+            }
+            case 'task_complete': {
+              completedAgents.current.add(event.agent_id);
+              setAgentStatus(event.agent_id, 'completed');
+              const agentCode = execMessages[`task${event.task_id}`];
+              if (agentCode) {
+                const { files, fullHtml } = parseCodeBlocks(agentCode);
+                // Only Alex's HTML goes to the preview; other agents' files go only to the editor
+                if (event.agent_id === 'alex') {
+                  if (fullHtml) onCodeGenerated?.(files, fullHtml);
+                  else if (files.length > 0) onCodeGenerated?.(files, '');
+                  else onCodeGenerated?.([], `<html><body><pre>${agentCode}</pre></body></html>`);
+                } else if (files.length > 0) {
+                  // Emma: files go to editor only (no HTML for preview)
+                  onCodeGenerated?.(files, '');
+                }
+              }
+              break;
+            }
+            case 'summary': {
+              const summaryId = `${execBaseId}-summary`;
+              const display = processAIResponse(event.content || '');
+              const summaryMsg = { id: summaryId, role: 'assistant' as const, content: event.content || '', displayContent: display, agentId: 'mike', timestamp: formatTimestamp() };
+              if (isActiveConv) {
+                setMessages((prev) => {
+                  // Remove old plan message to avoid duplicate Mike bubbles
+                  const filtered = prev.filter((m) => !(m.agentId === 'mike' && m.id.endsWith('-plan')));
+                  return [...filtered, summaryMsg];
+                });
+              }
+              if (streamBuffers.current[execConvId]) {
+                const buf = streamBuffers.current[execConvId];
+                buf.messages = buf.messages.filter((m: any) => !(m.agentId === 'mike' && m.id.endsWith('-plan')));
+                buf.messages.push(summaryMsg);
+              }
+              onCodeGenerate?.();
+              break;
+            }
+            case 'error': {
+              const errMsg = { id: `${execBaseId}-err`, role: 'assistant' as const, content: `⚠️ ${event.error}`, agentId: 'mike', timestamp: formatTimestamp() };
+              if (isActiveConv) setMessages((prev) => [...prev, errMsg]);
+              if (streamBuffers.current[execConvId]) streamBuffers.current[execConvId].messages.push(errMsg);
+              break;
+            }
+            case 'done': {
+              setAgentStatus('mike', 'completed');
+              const allAgentsDone = [...expectedAgents].every((a) => completedAgents.current.has(a));
+              if (!allAgentsDone) break;
+              planExecutedRef.current = true;
+              if (streamBuffers.current[execConvId]) {
+                streamBuffers.current[execConvId].isTyping = false;
+              }
+              const buf = streamBuffers.current[execConvId];
+              const finalMsgs = buf ? buf.messages : messagesRef.current;
+              if (buf) buf.messages = finalMsgs;
+              saveConversation(finalMsgs);
+              setIsTyping(false);
+              pendingStreamRef.current = null;
+              break;
+            }
+          }
+        },
+        onError: (error: string) => {
+          setIsTyping(false);
+          pendingStreamRef.current = null;
+        },
+      },
+      abortControllerRef.current?.signal,
+    );
+  }, [planData, isTyping, processAIResponse, onCodeGenerate, onCodeGenerated, saveConversation]);
+
   const handleSend = async () => {
     if (!input.trim() || isTyping || pendingStreamRef.current) return;
+
+    const effectiveAgentId = workMode === 'team' ? 'mike' : (activeAgentId || null);
+
+    const now = formatTimestamp();
 
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
       content: input.trim(),
+      timestamp: now,
     };
 
     const updatedMessages = [...messages, userMessage];
@@ -435,10 +747,10 @@ export default function ChatPanel({
       baseMessages: updatedMessages,
     };
 
-    // Save conversation immediately when user sends a message
-    saveConversation(updatedMessages);
+    if (currentConvId) {
+      saveConversation(updatedMessages);
+    }
 
-    // Build messages for the AI API (include conversation history)
     const apiMessages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
       { role: 'system', content: SYSTEM_PROMPT },
       ...updatedMessages.map((m) => ({
@@ -447,67 +759,217 @@ export default function ChatPanel({
       })),
     ];
 
-    // Use backend proxy with DeepSeek
     abortControllerRef.current = new AbortController();
 
-    try {
+    if (workMode !== 'team') {
       setMessages((prev) => [
         ...prev,
-        { id: assistantId, role: 'assistant', content: '⏳ 正在思考...' },
+        { id: assistantId, role: 'assistant', content: '', timestamp: now, agentId: effectiveAgentId || undefined },
       ]);
+    }
 
-      if (abortRef.current) return;
+    if (abortRef.current) return;
 
-      const data = await api.post<any>('/api/v1/chat/proxy', {
-        messages: apiMessages,
-        model: 'deepseek-chat',
-      });
+    let accumulatedContent = '';
+    let finalAgentId: string | undefined;
 
-      if (abortRef.current) return;
-
-      const content = data?.content || '未收到回复';
-
+    const handleStreamToken = (token: string) => {
+      accumulatedContent += token;
       if (requestConvIdRef.current === currentConvIdRef.current) {
+        setMessages((prev) => {
+          const updated = [...prev];
+          const lastMsg = updated[updated.length - 1];
+          if (lastMsg?.id === assistantId) {
+            updated[updated.length - 1] = { ...lastMsg, content: accumulatedContent };
+          }
+          return updated;
+        });
+      }
+    };
+
+    const handleStreamDone = (extra?: Record<string, any>) => {
+      if (requestConvIdRef.current === currentConvIdRef.current) {
+        const agentId = extra?.agent_id || effectiveAgentId || undefined;
+        finalAgentId = agentId;
+        const content = accumulatedContent || '未收到回复';
         const display = processAIResponse(content);
+        const replyTimestamp = formatTimestamp();
         const finalMessages: Message[] = [
           ...updatedMessages,
-          { id: assistantId, role: 'assistant', content, displayContent: display },
+          { id: assistantId, role: 'assistant', content, displayContent: display, agentId, timestamp: replyTimestamp },
         ];
         setMessages(finalMessages);
         onCodeGenerate?.();
         setIsTyping(false);
-        saveConversation(finalMessages, requestConvIdRef.current!);
+        saveConversation(finalMessages);
       } else {
+        const content = accumulatedContent || '未收到回复';
+        const replyTimestamp = formatTimestamp();
         const finalMessages: Message[] = [
           ...updatedMessages,
-          { id: assistantId, role: 'assistant', content },
+          { id: assistantId, role: 'assistant', content, agentId: finalAgentId || effectiveAgentId || undefined, timestamp: replyTimestamp },
         ];
         setIsTyping(false);
-        saveConversation(finalMessages, requestConvIdRef.current!, true);
+        saveConversation(finalMessages, undefined, true);
       }
       pendingStreamRef.current = null;
-    } catch (e: unknown) {
+    };
+
+    const handleStreamError = (error: string) => {
       if (abortRef.current) {
         pendingStreamRef.current = null;
         return;
       }
-      const errorDetail =
-        (e as { data?: { detail?: string } })?.data?.detail ||
-        (e as { message?: string })?.message ||
-        '请求失败，请稍后重试';
+      const errorTimestamp = formatTimestamp();
       const errorMessages: Message[] = [
         ...updatedMessages,
         {
           id: assistantId,
           role: 'assistant',
-          content: `⚠️ ${errorDetail}`,
+          content: `⚠️ ${error}`,
+          agentId: effectiveAgentId || undefined,
+          timestamp: errorTimestamp,
         },
       ];
       if (requestConvIdRef.current === currentConvIdRef.current) {
         setMessages(errorMessages);
       }
       setIsTyping(false);
-      saveConversation(errorMessages, requestConvIdRef.current!, requestConvIdRef.current !== currentConvIdRef.current);
+      saveConversation(errorMessages, undefined, requestConvIdRef.current !== currentConvIdRef.current);
+      pendingStreamRef.current = null;
+    };
+
+    try {
+      if (workMode === 'team') {
+        setPlanData(null);
+        const teamBaseId = Date.now().toString();
+        const teamMessages: Record<string, string> = {};
+        const planMsgId = `${teamBaseId}-plan`;
+
+        if (abortRef.current) return;
+
+        setMessages((prev) => [...prev, { id: planMsgId, role: 'assistant', content: '', agentId: 'mike', timestamp: now }]);
+
+        const streamConvId = currentConvIdRef.current || `_plan_${teamBaseId}`;
+        streamBuffers.current[streamConvId] = {
+          messages: messagesRef.current,
+          planData: null,
+          isTyping: true,
+          teamMessages: {},
+          timestamp: now,
+        };
+
+        await api.postStream(
+          '/api/v1/agents/team/plan/stream',
+          { messages: apiMessages.slice(1) },
+          {
+            onEvent: (event: Record<string, any>) => {
+              if (abortRef.current) return;
+              switch (event.type) {
+                case 'phase':
+                  setAgentStatus('mike', 'thinking');
+                  break;
+                case 'token': {
+                  teamMessages.mike = (teamMessages.mike || '') + (event.token || '');
+                  setMessages((prev) => {
+                    const u = [...prev];
+                    const i = u.findIndex((m) => m.id === planMsgId);
+                    if (i >= 0) u[i] = { ...u[i], content: teamMessages.mike };
+                    return u;
+                  });
+                  break;
+                }
+                case 'plan':
+                  if (event.requires_review) {
+                    const plan = { analysis: event.analysis || '', tasks: event.tasks || [] };
+                    setPlanData(plan);
+                    // Replace the Mike bubble with a user-friendly task flow
+                    const agentLabels: Record<string, string> = { alex: '👨‍💻 Alex(工程师)', emma: '📋 Emma(产品)' };
+                    const taskFlow = (plan.tasks || []).map((t: any, i: number) => {
+                      const who = agentLabels[t.agent_id] || t.agent_id;
+                      return `${i + 1}. ${who} — ${t.title}`;
+                    }).join('\n');
+                    setMessages((prev) => {
+                      const u = [...prev];
+                      const idx = u.findIndex((m) => m.id === planMsgId);
+                      if (idx >= 0) {
+                        u[idx] = {
+                          ...u[idx],
+                          content: `📋 执行计划\n\n${plan.analysis || ''}\n\n${taskFlow}`,
+                          timestamp: formatTimestamp(),
+                        };
+                      }
+                      const convId = requestConvIdRef.current;
+                      if (convId && streamBuffers.current[convId]) {
+                        streamBuffers.current[convId].messages = u;
+                      }
+                      return u;
+                    });
+                    const convId = requestConvIdRef.current;
+                    if (convId && streamBuffers.current[convId]) {
+                      streamBuffers.current[convId].planData = plan;
+                    }
+                  }
+                  break;
+                case 'summary': {
+                  setAgentStatus('mike', 'completed');
+                  const summaryId = `${teamBaseId}-direct`;
+                  const d = processAIResponse(event.content || '');
+                  setMessages((prev) => [
+                    ...prev.filter((m) => m.id !== planMsgId),
+                    { id: summaryId, role: 'assistant', content: event.content || '', displayContent: d, agentId: 'mike', timestamp: formatTimestamp() },
+                  ]);
+                  break;
+                }
+                case 'error':
+                  setMessages((prev) => [...prev, { id: `${teamBaseId}-err`, role: 'assistant', content: `⚠️ ${event.error}`, agentId: 'mike', timestamp: formatTimestamp() }]);
+                  break;
+                case 'done':
+                  setIsTyping(false);
+                  pendingStreamRef.current = null;
+                  if (!planData) {
+                    saveConversation(messagesRef.current);
+                  }
+                  break;
+              }
+            },
+            onError: (error: string) => {
+              setMessages((prev) => [...prev, { id: `${teamBaseId}-erre`, role: 'assistant', content: `⚠️ ${error}`, agentId: 'mike', timestamp: formatTimestamp() }]);
+              setIsTyping(false);
+              pendingStreamRef.current = null;
+            },
+          },
+          abortControllerRef.current?.signal,
+        );
+      } else if (effectiveAgentId) {
+        await api.postStream(
+          '/api/v1/agents/chat/stream',
+          { agent_id: effectiveAgentId, messages: apiMessages },
+          { onToken: handleStreamToken, onDone: handleStreamDone, onError: handleStreamError },
+          abortControllerRef.current?.signal,
+        );
+      } else {
+        await api.postStream(
+          '/api/v1/chat/proxy/stream',
+          { messages: apiMessages, model: 'deepseek-chat' },
+          { onToken: handleStreamToken, onDone: handleStreamDone, onError: handleStreamError },
+          abortControllerRef.current?.signal,
+        );
+      }
+    } catch (e: unknown) {
+      if (!abortRef.current) {
+        const errorDetail = '发生未知错误';
+        const errorTimestamp = formatTimestamp();
+        const errorMessages: Message[] = [
+          ...updatedMessages,
+          { id: assistantId, role: 'assistant', content: `⚠️ ${errorDetail}`, agentId: effectiveAgentId || undefined, timestamp: errorTimestamp },
+        ];
+        if (requestConvIdRef.current === currentConvIdRef.current) {
+          setMessages(errorMessages);
+        }
+        setIsTyping(false);
+        saveConversation(errorMessages, undefined, requestConvIdRef.current !== currentConvIdRef.current);
+      }
       pendingStreamRef.current = null;
     } finally {
       abortControllerRef.current = null;
@@ -525,36 +987,33 @@ export default function ChatPanel({
     isTyping && requestConvIdRef.current === currentConvId;
 
   return (
-    <div className="flex flex-col h-full bg-[#0f0f23] border-r border-border relative">
-      {/* Header */}
+    <div className="flex flex-col h-full bg-background border-r border-border relative">
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
         <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
         <span className="text-sm font-medium text-muted-foreground">
-          AI 助手
+          {workMode === 'team' ? 'Team 协作' : 'AI 助手'}
         </span>
       </div>
 
-      {/* Messages */}
       <ScrollArea className="flex-1 p-4" ref={scrollRef}>
         <div className="space-y-4">
-          {/* Empty state / Welcome */}
           {messages.length === 0 && !isTyping && (
             <div className="flex flex-col items-center justify-center h-full min-h-[300px] py-12 px-4">
-              <div className="w-12 h-12 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center mb-6">
+              <div className="w-12 h-12 rounded-full bg-gradient-to-br from-primary to-accent flex items-center justify-center mb-6">
                 <Bot className="w-6 h-6 text-white" />
               </div>
               <h2 className="text-xl font-semibold text-foreground mb-2">
-                你想构建什么？
+                {workMode === 'team' ? '开始团队协作' : '你想构建什么？'}
               </h2>
               <p className="text-sm text-muted-foreground mb-8 text-center">
-                描述你的想法，我来帮你实现
+                {workMode === 'team' ? '描述你的想法，Mike 会协调团队为你实现' : '描述你的想法，我来帮你实现'}
               </p>
               <div className="grid grid-cols-1 gap-2 w-full max-w-sm">
                 {SUGGESTED_PROMPTS.map((prompt) => (
                   <button
                     key={prompt}
                     onClick={() => setInput(prompt)}
-                    className="text-left px-4 py-3 rounded-lg border border-border bg-[#1a1a2e] text-sm text-foreground hover:border-indigo-500/50 hover:bg-indigo-500/5 transition-colors"
+                    className="text-left px-4 py-3 rounded-lg border border-border bg-muted text-sm text-foreground hover:border-primary/30 hover:bg-primary/5 transition-colors"
                   >
                     {prompt}
                   </button>
@@ -563,56 +1022,113 @@ export default function ChatPanel({
             </div>
           )}
 
-          {messages.map((msg) => (
-            <div
-              key={msg.id}
-              className={`flex gap-3 fade-in-up ${
-                msg.role === 'user' ? 'justify-end' : 'justify-start'
-              }`}
-            >
-              {msg.role === 'assistant' && (
-                <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center">
-                  <Bot className="w-4 h-4 text-white" />
-                </div>
-              )}
+          {messages.map((msg) => {
+            const agentInfo = msg.agentId
+              ? agents.find((a: AgentDef) => a.id === msg.agentId)
+              : null;
+
+            if (agentInfo && msg.role === 'assistant') {
+              const agentDone = completedAgents.current.has(msg.agentId || '');
+              const isStreaming = workMode === 'team'
+                ? isTyping && !agentDone
+                : msg.content === '' && isTyping;
+              // Agent-specific status labels
+              const agentStatusMap: Record<string, string> = {
+                alex: 'coding',
+                emma: 'planning',
+              };
+              const streamStatus = agentStatusMap[msg.agentId || ''] || 'thinking';
+              return (
+                <AgentMessageBubble
+                  key={msg.id}
+                  agent={agentInfo}
+                  content={sanitizeDisplayContent(msg.content)}
+                  status={isStreaming ? streamStatus : 'completed'}
+                  taskTitle={msg.taskTitle}
+                  timestamp={msg.timestamp}
+                />
+              );
+            }
+
+            return (
               <div
-                className={`max-w-[85%] rounded-lg px-3 py-2 text-sm leading-relaxed ${
-                  msg.role === 'user'
-                    ? 'bg-indigo-600/20 border border-indigo-500/30 text-foreground'
-                    : 'bg-[#1a1a2e] border border-border text-foreground'
+                key={msg.id}
+                className={`flex gap-3 fade-in-up group ${
+                  msg.role === 'user' ? 'justify-end' : 'justify-start'
                 }`}
               >
-                <p className="whitespace-pre-wrap">
-                  {getDisplayContent(msg)}
-                </p>
-              </div>
-              {msg.role === 'user' && (
-                <div className="flex-shrink-0 w-7 h-7 rounded-full bg-[#1a1a2e] border border-border flex items-center justify-center">
-                  <User className="w-4 h-4 text-muted-foreground" />
+                {msg.role === 'assistant' && (
+                  <Avatar className="w-7 h-7">
+                    <AvatarImage src={agentsMapRef.current[msg.agentId || '']?.avatarUrl} alt="AI" className="object-cover" />
+                    <AvatarFallback className="bg-gradient-to-br from-primary to-accent text-[10px] text-white font-bold">
+                      AI
+                    </AvatarFallback>
+                  </Avatar>
+                )}
+                <div
+                  className={`max-w-[85%] rounded-lg px-3 py-2 text-sm leading-relaxed ${
+                    msg.role === 'user'
+                      ? 'bg-primary/10 border border-primary/20 text-foreground'
+                      : 'bg-muted border border-border text-foreground'
+                  }`}
+                >
+                  {msg.role === 'assistant' && (
+                    <div className="flex items-center gap-1 mb-1.5">
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground border border-border">
+                        AI 助手
+                      </span>
+                      {msg.timestamp && (
+                        <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">
+                          {msg.timestamp}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {msg.taskTitle && (
+                    <div className="flex items-center gap-1 mb-1.5">
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 border border-blue-200">
+                        📋 {msg.taskTitle}
+                      </span>
+                    </div>
+                  )}
+                  {msg.content === '' && msg.role === 'assistant' ? (
+                    <div className="flex gap-1 py-1">
+                      <span className="typing-dot w-1.5 h-1.5 rounded-full bg-primary" />
+                      <span className="typing-dot w-1.5 h-1.5 rounded-full bg-primary" />
+                      <span className="typing-dot w-1.5 h-1.5 rounded-full bg-primary" />
+                    </div>
+                  ) : (
+                    <div className="prose prose-sm max-w-none prose-headings:text-foreground prose-p:text-foreground prose-strong:text-foreground prose-code:text-foreground">
+                      <Markdown>{sanitizeDisplayContent(msg.content)}</Markdown>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          ))}
+                {msg.role === 'user' && (
+                  <Avatar className="w-7 h-7">
+                    <AvatarImage src="/avatars/user.svg" alt="You" className="object-cover" />
+                    <AvatarFallback className="bg-gradient-to-br from-yellow-400 to-amber-500 text-[10px] text-white font-bold">
+                      Me
+                    </AvatarFallback>
+                  </Avatar>
+                )}
+              </div>
+            );
+          })}
 
-          {/* Typing indicator */}
-          {isStreamingToCurrentConv && !messages.find((m) => m.id === (Date.now() + 1).toString()) && (
-            <div className="flex gap-3 justify-start fade-in-up">
-              <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center">
-                <Bot className="w-4 h-4 text-white" />
-              </div>
-              <div className="bg-[#1a1a2e] border border-border rounded-lg px-4 py-3">
-                <div className="flex gap-1">
-                  <span className="typing-dot w-2 h-2 rounded-full bg-indigo-400" />
-                  <span className="typing-dot w-2 h-2 rounded-full bg-indigo-400" />
-                  <span className="typing-dot w-2 h-2 rounded-full bg-indigo-400" />
-                </div>
-              </div>
-            </div>
+          {planData && (
+            <PlanReview
+              analysis={planData.analysis}
+              tasks={planData.tasks}
+              agents={agents}
+              onConfirm={handleTeamExecute}
+              onRegenerate={() => setPlanData(null)}
+            />
           )}
+          <div ref={bottomRef} />
+
         </div>
       </ScrollArea>
 
-      {/* Input */}
       <div className="p-3 border-t border-border">
         <div className="flex gap-2">
           <Input
@@ -620,13 +1136,13 @@ export default function ChatPanel({
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="输入你的需求..."
-            className="bg-[#1a1a2e] border-border text-foreground placeholder:text-muted-foreground focus-visible:ring-indigo-500/50"
+            className="bg-muted border-border text-foreground placeholder:text-muted-foreground focus-visible:ring-primary/50"
           />
           <Button
             onClick={handleSend}
             disabled={!input.trim() || isStreamingToCurrentConv}
             size="icon"
-            className="bg-gradient-to-r from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 text-white border-0"
+            className="bg-gradient-to-r from-primary to-accent hover:from-primary/90 hover:to-accent/90 text-white border-0"
           >
             <Send className="w-4 h-4" />
           </Button>

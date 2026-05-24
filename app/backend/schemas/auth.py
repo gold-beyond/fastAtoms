@@ -37,3 +37,15 @@ class SimpleLoginResponse(BaseModel):
     expires_at: str
     token_type: str
     user: UserResponse
+
+
+class RegisterRequest(BaseModel):
+    name: str
+    password: str
+
+
+class RegisterResponse(BaseModel):
+    token: str
+    expires_at: str
+    token_type: str
+    user: UserResponse

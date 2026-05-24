@@ -9,6 +9,7 @@ class User(Base):
     id = Column(String(255), primary_key=True, index=True)  # Use platform sub as primary key
     email = Column(String(255), nullable=False, unique=True)
     name = Column(String(255), nullable=True)
+    password_hash = Column(String(255), nullable=True)  # bcrypt hash for simple auth users
     role = Column(String(50), default="user", nullable=False)  # user/admin
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_login = Column(DateTime(timezone=True), nullable=True)

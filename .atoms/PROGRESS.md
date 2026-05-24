@@ -1,3 +1,7 @@
+---
+last_updated: 2026-05-22T09:11:52Z
+---
+
 # Requirements & Progress
 
 ## Requirements Overview
@@ -16,7 +20,6 @@
 - [x] Update UI with user menu and project list sidebar
 - [x] Add backend AI proxy for custom API keys (OpenAI/Anthropic/DeepSeek)
 - [x] Add AI settings UI with provider/key/model configuration
-- [x] Design multi-agent system (P0 + P1) - architecture document
 
 ## Progress Log
 - 2026-05-22: All 5 tasks implemented. Lint and build pass. Dark theme IDE layout with chat, code editor, preview, and publish flow complete.
@@ -24,4 +27,4 @@
 - 2026-05-22: Implemented real AI chat using client.ai.gentxt streaming with claude-opus-4.6 model. Replaced simulated responses with live AI streaming.
 - 2026-05-22: Added backend AI proxy (POST /api/v1/chat/proxy) supporting OpenAI, Anthropic, DeepSeek with user's own API keys. Added AISettings UI component with provider/key/model configuration stored in localStorage. ChatPanel now switches between built-in Atoms AI and custom proxy based on settings.
 - 2026-05-22: Added conversation history feature. Chat header now has a clock icon button that toggles a conversation history overlay. Logged-in users fetch history from backend; non-logged-in users use localStorage. Users can switch between conversations and create new ones.
-- 2026-05-23: Generated multi-agent system design document at /workspace/app/docs/multi-agent-design.md. Covers P0 (Agent definitions, selection/switching, identity display, Team/Engineer mode) and P1 (task visualization, status indicators, context sharing, custom agents). Includes data models, API design, frontend components, backend services, and implementation plan.
+
