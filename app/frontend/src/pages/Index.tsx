@@ -7,12 +7,20 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Rocket, PanelLeft, Code2, LogOut, FolderOpen, User } from 'lucide-react';
+import { Rocket, PanelLeft, Code2, LogOut, FolderOpen, User, Settings } from 'lucide-react';
 import { AgentProvider, useAgentContext } from '@/contexts/AgentContext';
 import ChatPanel from '@/components/ChatPanel';
 import CodeEditor from '@/components/CodeEditor';
 import PreviewPanel from '@/components/PreviewPanel';
 import PublishDialog from '@/components/PublishDialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+
 import ProjectSidebar from '@/components/ProjectSidebar';
 import ConversationSidebar, { ConversationSidebarToggle } from '@/components/ConversationSidebar';
 import AgentBar from '@/components/AgentBar';
@@ -84,6 +92,7 @@ function AppContent({ user, loading, logout, navigate, publishOpen, setPublishOp
   );
   const [convSidebarCollapsed, setConvSidebarCollapsed] = useState(false);
   const [agentBarVisible, setAgentBarVisible] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   const isLoggedIn = !!user;
 
@@ -289,6 +298,14 @@ function AppContent({ user, loading, logout, navigate, publishOpen, setPublishOp
         </div>
 
         <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground hover:text-foreground"
+            onClick={() => setShowSettings(true)}
+          >
+            <Settings className="w-4 h-4" />
+          </Button>
           <div className="relative">
             <Button
               variant="ghost"
@@ -309,14 +326,6 @@ function AppContent({ user, loading, logout, navigate, publishOpen, setPublishOp
           >
             <PanelLeft className="w-4 h-4 mr-1" />
             <span className="text-xs">面板</span>
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <Code2 className="w-4 h-4 mr-1" />
-            <span className="text-xs">编辑器</span>
           </Button>
           <Button
             onClick={() => setPublishOpen(true)}
@@ -434,16 +443,7 @@ function AppContent({ user, loading, logout, navigate, publishOpen, setPublishOp
             >
               预览
             </button>
-            <button
-              onClick={() => setRightPanelTab('editor')}
-              className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
-                rightPanelTab === 'editor'
-                  ? 'bg-primary/10 text-primary border border-primary/20'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-              }`}
-            >
-              编辑器
-            </button>
+
           </div>
 
           <div className="flex-1 min-h-0">
@@ -460,6 +460,58 @@ function AppContent({ user, loading, logout, navigate, publishOpen, setPublishOp
       </div>
 
       <PublishDialog open={publishOpen} onOpenChange={setPublishOpen} />
+
+      <Dialog open={showSettings} onOpenChange={setShowSettings}>
+        <DialogContent className="bg-white border-border text-foreground sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-base flex items-center gap-2">
+              <Settings className="w-4 h-4" />
+              AI 配置
+            </DialogTitle>
+          </DialogHeader>
+          <SettingsPanel />
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function SettingsPanel() {
+  const [apiKey, setApiKey] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const handleSave = async () => {
+    if (!apiKey.trim()) return;
+    setSaving(true);
+    try {
+      await api.put('/api/v1/admin/settings/shared-key/deepseek', { provider: 'deepseek', api_key: apiKey.trim() });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch {}
+    setSaving(false);
+  };
+
+  return (
+    <div className="space-y-4 py-2">
+      <p className="text-xs text-muted-foreground">
+        配置 DeepSeek API Key
+      </p>
+      <Input
+        type="password"
+        value={apiKey}
+        onChange={(e) => setApiKey(e.target.value)}
+        placeholder="sk-..."
+        className="text-sm"
+      />
+      <Button
+        size="sm"
+        className="w-full h-8 text-xs"
+        onClick={handleSave}
+        disabled={saving || !apiKey.trim()}
+      >
+        {saving ? '保存中...' : saved ? '✅ 已保存' : '保存'}
+      </Button>
     </div>
   );
 }
