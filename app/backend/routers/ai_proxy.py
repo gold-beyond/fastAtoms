@@ -61,11 +61,12 @@ async def _stream_events(data: ChatProxyRequest):
             api_key=data.api_key,
             provider=data.provider,
         ):
-            yield f"data: {json.dumps({'token': token})}\n\n"
-        yield f"data: {json.dumps({'done': True})}\n\n"
+            yield f"data: {json.dumps({'token': token})}\n\n".encode("utf-8")
+        yield f"data: {json.dumps({'done': True})}\n\n".encode("utf-8")
     except Exception as e:
         logger.error("Stream error: %s", e)
-        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        err_msg = str(e).encode("ascii", errors="replace").decode("ascii")
+        yield f"data: {json.dumps({'error': err_msg})}\n\n".encode("utf-8")
 
 
 @router.post("/proxy/stream")

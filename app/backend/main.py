@@ -1,10 +1,76 @@
 import importlib
+import io
+import locale as _locale
 import logging
 import os
 import pkgutil
+import sys
 import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime
+
+# ── UTF-8 Encoding Fix ──────────────────────────────────────────────
+# This MUST run before any third-party library is imported, because:
+# 1. locale.getpreferredencoding() returns cp936 on most Windows systems,
+#    which some libraries (or Python internals) may use for encoding.
+# 2. PYTHONUTF8 must be set before Python startup to have full effect,
+#    but we also apply post-startup fixes for stdio and locale.
+# ────────────────────────────────────────────────────────────────────
+os.environ.setdefault("PYTHONUTF8", "1")
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+
+_utf8_fix_applied = False
+
+
+def _fix_encoding() -> None:
+    global _utf8_fix_applied
+    if _utf8_fix_applied:
+        return
+    _utf8_fix_applied = True
+
+    # Windows console: set code pages to UTF-8 (65001)
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.kernel32.SetConsoleCP(65001)
+            ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+        except Exception:
+            pass
+
+    # Reconfigure stdio to UTF-8
+    for stream_name in ("stdin", "stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is None:
+            continue
+        try:
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8")
+            elif hasattr(stream, "buffer"):
+                setattr(sys, stream_name,
+                        io.TextIOWrapper(stream.buffer, encoding="utf-8",
+                                         errors=getattr(stream, "errors", "strict"),
+                                         newline=getattr(stream, "newlines", None) or ""))
+        except Exception:
+            pass
+
+    # Monkey-patch locale.getpreferredencoding so ALL libraries see UTF-8.
+    # httpx, uvicorn, starlette, and others may query this at any point.
+    try:
+        if _locale.getpreferredencoding(False).lower() != "utf-8":
+            try:
+                _locale.setlocale(_locale.LC_CTYPE, "en_US.UTF-8")
+            except _locale.Error:
+                try:
+                    _locale.setlocale(_locale.LC_CTYPE, "C.UTF-8")
+                except _locale.Error:
+                    pass
+        if _locale.getpreferredencoding(False).lower() != "utf-8":
+            _locale.getpreferredencoding = lambda do_setlocale=True: "utf-8"
+    except Exception:
+        pass
+
+
+_fix_encoding()
 
 from core.config import settings
 from fastapi import FastAPI, HTTPException, Request, status
@@ -41,9 +107,7 @@ def setup_logging():
         level=logging.DEBUG,
         format=log_format,
         handlers=[
-            # File handler
             logging.FileHandler(log_file, encoding="utf-8"),
-            # Console handler
             logging.StreamHandler(),
         ],
     )
@@ -56,7 +120,8 @@ def setup_logging():
     logger = logging.getLogger(__name__)
     logger.info("=== Logging system initialized ===")
     logger.info(f"Log file: {log_file}")
-    logger.info("Log level: INFO")
+    logger.info("Log level: DEBUG")
+    logger.info(f"Locale encoding: {_locale.getpreferredencoding(False)}")
     logger.info(f"Timestamp: {timestamp}")
 
 

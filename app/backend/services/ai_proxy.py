@@ -3,11 +3,21 @@ import json
 import logging
 from typing import AsyncGenerator, List, Dict, Any, Optional
 
+import httpx
 from core.config import settings
 from services.aihub import AIHubService
 from schemas.aihub import GenTxtRequest, ChatMessage
 
 logger = logging.getLogger(__name__)
+
+
+def _create_http_client() -> httpx.AsyncClient:
+    """Create an httpx client with explicit UTF-8 encoding to prevent
+    UnicodeEncodeError on systems where the default encoding is ASCII."""
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(60.0, connect=10.0),
+        default_encoding="utf-8",
+    )
 
 
 # In-memory cache for shared API keys (set via UI, stored in DB)
@@ -111,7 +121,9 @@ async def _call_openai_compatible(
     if provider == "deepseek":
         base_url = "https://api.deepseek.com"
 
-    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+    client = AsyncOpenAI(
+        api_key=api_key, base_url=base_url, http_client=_create_http_client()
+    )
 
     try:
         response = await client.chat.completions.create(
@@ -132,7 +144,7 @@ async def _call_anthropic(
     """Call Anthropic API."""
     from anthropic import AsyncAnthropic
 
-    client = AsyncAnthropic(api_key=api_key)
+    client = AsyncAnthropic(api_key=api_key, http_client=_create_http_client())
 
     # Separate system message from conversation messages
     system_content = ""
@@ -217,7 +229,9 @@ async def _call_openai_compatible_stream(
     if provider == "deepseek":
         base_url = "https://api.deepseek.com"
 
-    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+    client = AsyncOpenAI(
+        api_key=api_key, base_url=base_url, http_client=_create_http_client()
+    )
 
     try:
         stream = await client.chat.completions.create(
@@ -243,7 +257,7 @@ async def _call_anthropic_stream(
     """Call Anthropic API with streaming."""
     from anthropic import AsyncAnthropic
 
-    client = AsyncAnthropic(api_key=api_key)
+    client = AsyncAnthropic(api_key=api_key, http_client=_create_http_client())
 
     system_content = ""
     chat_messages = []

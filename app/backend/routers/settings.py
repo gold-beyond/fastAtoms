@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from models.shared_key import SharedKey
 from pydantic import BaseModel
 from schemas.auth import UserResponse
-from services.ai_proxy import set_shared_key_cache
+# Import lazily to avoid aihub Python 3.9 compat issue
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,15 +27,19 @@ async def get_shared_key(
     current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get the shared API key for a provider (returns masked)."""
+    """Get shared key status and who configured it (auth required)."""
     try:
         result = await db.execute(select(SharedKey).where(SharedKey.provider == provider))
         entry = result.scalar_one_or_none()
         key = entry.api_key if entry and entry.api_key else ""
-        # Populate cache so AI proxy can use it without a DB query
         if key:
-            set_shared_key_cache(provider, key)
-        return {"configured": bool(key), "key_preview": key[:8] + "..." if len(key) > 8 else ""}
+            from services.ai_proxy import set_shared_key_cache; set_shared_key_cache(provider, key)
+        return {
+            "configured": bool(key),
+            "key_preview": key[:8] + "..." if len(key) > 8 else "",
+            "owner": entry.updated_by if entry and entry.updated_by else "",
+            "current_user_id": str(current_user.id),
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -47,7 +51,7 @@ async def set_shared_key(
     current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Set the shared API key for a provider (any logged-in user can set)."""
+    """Set the shared API key for a provider (auth required, tracks who set it)."""
     try:
         result = await db.execute(select(SharedKey).where(SharedKey.provider == provider))
         entry = result.scalar_one_or_none()
@@ -64,7 +68,7 @@ async def set_shared_key(
             db.add(entry)
         await db.commit()
         # Update in-memory cache for immediate use (no restart needed)
-        set_shared_key_cache(provider, update.api_key)
+        from services.ai_proxy import set_shared_key_cache; set_shared_key_cache(provider, update.api_key)
         return {"message": f"{provider} API key saved successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -253,3 +257,5 @@ async def delete_frontend_setting(key: str, current_user: UserResponse = Depends
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete configuration: {str(e)}")
 
+ 
+ 

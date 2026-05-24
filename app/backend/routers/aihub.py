@@ -134,10 +134,11 @@ async def generate_text(
             async def event_generator():
                 try:
                     async for content in service.gentxt_stream(request):
-                        yield json.dumps({"content": content})
+                        yield json.dumps({"content": content}, ensure_ascii=False)
                 except Exception as e:
                     logger.error(f"Stream error: {e}")
-                    yield json.dumps({"content": f"[ERROR] {extract_error_message(e)}"})
+                    err_msg = str(e).encode("ascii", errors="replace").decode("ascii")
+                    yield json.dumps({"content": f"[ERROR] {err_msg}"}, ensure_ascii=False)
                 finally:
                     yield "[DONE]"
 

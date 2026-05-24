@@ -10,14 +10,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
+
+def _safe_str(obj: Any) -> str:
+    """Convert any object to an ASCII-safe string, replacing non-ASCII characters."""
+    return str(obj).encode("ascii", errors="replace").decode("ascii")
+
 # Built-in Agent definitions
+# avatar_url values must be absolute CDN URLs matching the frontend AVATAR_URLS
+# in app/frontend/src/types/agent.ts to prevent broken avatars
 BUILTIN_AGENTS = [
     {
         "id": "mike",
         "name": "Mike",
         "role": "Team Leader",
         "avatar_color": "from-orange-400 to-amber-500",
-        "avatar_url": "/avatars/mike.svg",
+        "avatar_url": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-24/pfidnuqaagta/avatar-mike-team-leader.png",
         "skills": ["任务分解", "团队协调", "需求分析"],
         "is_builtin": True,
     },
@@ -26,7 +33,7 @@ BUILTIN_AGENTS = [
         "name": "Alex",
         "role": "Engineer",
         "avatar_color": "from-blue-500 to-blue-600",
-        "avatar_url": "/avatars/alex.svg?v=12",
+        "avatar_url": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-24/pfidoxqaagra/avatar-alex-engineer.png",
         "skills": ["代码开发", "Bug修复", "部署"],
         "is_builtin": True,
     },
@@ -35,7 +42,7 @@ BUILTIN_AGENTS = [
         "name": "Emma",
         "role": "Product Manager",
         "avatar_color": "from-pink-400 to-rose-500",
-        "avatar_url": "/avatars/emma.svg?v=2",
+        "avatar_url": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-24/pfidmfqaagsq/avatar-emma-product-manager.png",
         "skills": ["PRD", "竞品分析", "用户研究"],
         "is_builtin": True,
     },
@@ -202,7 +209,7 @@ class AgentOrchestrator:
                     mike_full_response += token
             except Exception as e:
                 logger.error(f"Mike analysis stream error (iter {iteration}): {e}")
-                yield {"type": "error", "error": f"Mike 分析失败: {e}"}
+                yield {"type": "error", "error": f"Mike analysis failed: {_safe_str(e)}"}
                 yield {"type": "done"}
                 return
 
@@ -229,15 +236,15 @@ class AgentOrchestrator:
 
             # ── Phase 3: Execute tasks ────────────────────────────
             yield {"type": "plan", "analysis": plan.get("analysis", ""), "tasks": [
-                {"agent_id": t["agent_id"], "title": t["title"], "task_id": i + 1}
+                {"agent_id": t.get("agent_id", "alex"), "title": t.get("title", "未知任务"), "task_id": i + 1}
                 for i, t in enumerate(tasks)
             ], "iteration": iteration}
 
             iteration_results = []
             for task in tasks:
                 global_task_id += 1
-                agent_id = task["agent_id"]
-                task_title = task["title"]
+                agent_id = task.get("agent_id", "alex")
+                task_title = task.get("title", "未知任务")
 
                 yield {"type": "task_start", "agent_id": agent_id, "task_id": global_task_id,
                        "title": task_title, "iteration": iteration}
@@ -262,7 +269,7 @@ class AgentOrchestrator:
                     logger.warning(f"Agent '{agent_id}' not found, falling back to 'alex'")
                     agent = self._get_agent("alex")
                     if not agent:
-                        yield {"type": "error", "error": f"Agent '{agent_id}' 未找到，且无备用 Agent"}
+                        yield {"type": "error", "error": f"Agent '{agent_id}' not found and no fallback agent"}
                         continue
 
                 system_prompt = AGENT_PROMPTS.get(agent_id, f"你是 {agent['name']}，{agent['role']}。")
@@ -278,7 +285,7 @@ class AgentOrchestrator:
                         agent_content += token
                 except Exception as e:
                     logger.error(f"Agent {agent_id} stream error (iter {iteration}): {e}")
-                    yield {"type": "error", "error": f"{agent_id} 执行任务失败: {e}"}
+                    yield {"type": "error", "error": f"{agent_id} task failed: {_safe_str(e)}"}
 
                 result_entry = {
                     "iteration": iteration,
@@ -324,8 +331,9 @@ class AgentOrchestrator:
                 yield {"type": "token", "agent_id": "mike", "token": token}
                 mike_full_response += token
         except Exception as e:
-            logger.error(f"Mike plan stream error: {e}")
-            yield {"type": "error", "error": f"Mike 分析失败: {e}"}
+            err_msg = str(e).encode('ascii', errors='replace').decode('ascii')
+            logger.error(f"Mike plan stream error: {err_msg}")
+            yield {"type": "error", "error": f"Mike plan failed: {err_msg}"}
             yield {"type": "done"}
             return
 
@@ -347,7 +355,7 @@ class AgentOrchestrator:
             "type": "plan",
             "analysis": plan.get("analysis", mike_full_response[:500]),
             "tasks": [
-                {"agent_id": t["agent_id"], "title": t["title"], "description": t.get("description", ""), "task_id": i + 1}
+                {"agent_id": t.get("agent_id", "alex"), "title": t.get("title", "未知任务"), "description": t.get("description", ""), "task_id": i + 1}
                 for i, t in enumerate(tasks)
             ],
             "requires_review": True,
@@ -371,8 +379,8 @@ class AgentOrchestrator:
 
         for task in tasks:
             global_task_id += 1
-            agent_id = task["agent_id"]
-            task_title = task["title"]
+            agent_id = task.get("agent_id", "alex")
+            task_title = task.get("title", "未知任务")
 
             yield {"type": "task_start", "agent_id": agent_id, "task_id": global_task_id,
                    "title": task_title}
@@ -413,7 +421,7 @@ class AgentOrchestrator:
                 logger.warning(f"Agent '{agent_id}' not found, falling back to 'alex'")
                 agent = self._get_agent("alex")
                 if not agent:
-                    yield {"type": "error", "error": f"Agent '{agent_id}' 未找到"}
+                    yield {"type": "error", "error": f"Agent '{agent_id}' not found"}
                     continue
 
             system_prompt = AGENT_PROMPTS.get(agent_id, f"你是 {agent['name']}，{agent['role']}。")
@@ -429,7 +437,7 @@ class AgentOrchestrator:
                     agent_content += token
             except Exception as e:
                 logger.error(f"Agent {agent_id} execute error: {e}")
-                yield {"type": "error", "error": f"{agent_id} 执行任务失败: {e}"}
+                yield {"type": "error", "error": f"{agent_id} task failed: {_safe_str(e)}"}
 
             all_results.append({"agent_id": agent_id, "title": task_title, "result": agent_content})
             yield {"type": "task_complete", "agent_id": agent_id,
@@ -477,16 +485,16 @@ class AgentOrchestrator:
 
         results = []
         for idx, task in enumerate(plan.get("tasks", [])):
-            agent_id = task["agent_id"]
+            agent_id = task.get("agent_id", "alex")
             task_messages = [
                 *messages,
                 {
                     "role": "user",
-                    "content": f"请完成以下任务：{task['title']}\n{task.get('description', '')}",
+                    "content": f"请完成以下任务：{task.get('title', '未知任务')}\n{task.get('description', '')}",
                 },
             ]
             result = await self.chat_with_agent(agent_id, task_messages, user_id)
-            results.append({"agent_id": agent_id, "title": task["title"], "result": result, "task_id": idx + 1})
+            results.append({"agent_id": agent_id, "title": task.get("title", "未知任务"), "result": result, "task_id": idx + 1})
 
         summary_content = f"任务分析：{plan.get('analysis', '')}\n\n各成员产出：\n"
         for r in results:
@@ -499,20 +507,35 @@ class AgentOrchestrator:
         }
 
     def _extract_json_plan(self, raw: str) -> Optional[Dict[str, Any]]:
-        """Extract a JSON task plan from Mike's raw response.
+        """Extract a JSON task plan from Mike's raw response."""
+        plan = self._try_parse_json(raw)
+        if plan is None:
+            return None
+        # Normalize tasks: ensure every task has agent_id and title
+        tasks = plan.get("tasks", [])
+        if isinstance(tasks, list):
+            normalized = []
+            for task in tasks:
+                if not isinstance(task, dict):
+                    continue
+                # Accept common title variants
+                title = task.get("title") or task.get("name") or task.get("task") or task.get("task_name") or ""
+                normalized.append({
+                    "agent_id": task.get("agent_id", "alex"),
+                    "title": title,
+                    "description": task.get("description", ""),
+                })
+            plan["tasks"] = normalized
+        return plan
 
-        Tries, in order:
-        1. Direct json.loads() on the full text
-        2. Find JSON inside ```json ... ``` code blocks
-        3. Find JSON between { and } at the outer level
-        """
-        # Strategy 1: direct parse
+    def _try_parse_json(self, raw: str) -> Optional[Dict[str, Any]]:
+        """Try multiple strategies to extract JSON from Mike's response."""
         raw_stripped = raw.strip()
+        # Strategy 1: direct parse
         try:
             return json.loads(raw_stripped)
         except json.JSONDecodeError:
             pass
-
         # Strategy 2: extract from ```json ... ``` or ``` ... ``` blocks
         import re
         code_block = re.search(r'```(?:json)?\s*\n?(.*?)```', raw_stripped, re.DOTALL)
@@ -521,7 +544,6 @@ class AgentOrchestrator:
                 return json.loads(code_block.group(1).strip())
             except json.JSONDecodeError:
                 pass
-
         # Strategy 3: find first { ... } pair at the right nesting level
         brace_start = raw_stripped.find('{')
         if brace_start >= 0:

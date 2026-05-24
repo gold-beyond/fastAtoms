@@ -83,12 +83,12 @@ export default function AISettingsDialog() {
         <Button
           variant="ghost"
           size="icon"
-          className="h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-[#1a1a2e]"
+          className="h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-muted"
         >
           <Settings className="w-4 h-4" />
         </Button>
       </DialogTrigger>
-      <DialogContent className="bg-[#0f0f23] border-border text-foreground sm:max-w-md">
+      <DialogContent className="bg-white border-border text-foreground sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="text-foreground">AI 设置</DialogTitle>
         </DialogHeader>
@@ -118,10 +118,10 @@ export default function AISettingsDialog() {
                     handleProviderChange(v as 'openai' | 'anthropic' | 'deepseek')
                   }
                 >
-                  <SelectTrigger className="bg-[#1a1a2e] border-border text-foreground">
+                  <SelectTrigger className="bg-white border-border text-foreground">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent className="bg-[#1a1a2e] border-border">
+                  <SelectContent className="bg-white border-border">
                     <SelectItem value="openai">OpenAI</SelectItem>
                     <SelectItem value="anthropic">Anthropic</SelectItem>
                     <SelectItem value="deepseek">DeepSeek</SelectItem>
@@ -139,7 +139,7 @@ export default function AISettingsDialog() {
                     setSettings((prev) => ({ ...prev, apiKey: e.target.value }))
                   }
                   placeholder="sk-..."
-                  className="bg-[#1a1a2e] border-border text-foreground placeholder:text-muted-foreground"
+                  className="bg-white border-border text-foreground placeholder:text-muted-foreground"
                 />
               </div>
 
@@ -152,10 +152,10 @@ export default function AISettingsDialog() {
                     setSettings((prev) => ({ ...prev, model: v }))
                   }
                 >
-                  <SelectTrigger className="bg-[#1a1a2e] border-border text-foreground">
+                  <SelectTrigger className="bg-white border-border text-foreground">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent className="bg-[#1a1a2e] border-border">
+                  <SelectContent className="bg-white border-border">
                     {(MODEL_SUGGESTIONS[settings.provider] || []).map((m) => (
                       <SelectItem key={m} value={m}>
                         {m}
@@ -170,7 +170,7 @@ export default function AISettingsDialog() {
           {/* Save button */}
           <Button
             onClick={handleSave}
-            className="w-full bg-gradient-to-r from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 text-white border-0"
+            className="w-full bg-gradient-to-r from-primary to-accent hover:from-primary/90 hover:to-accent/90 text-white border-0"
           >
             保存设置
           </Button>

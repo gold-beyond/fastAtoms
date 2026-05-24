@@ -177,7 +177,12 @@ export default function PublishDialog({
                       <Copy className="w-3.5 h-3.5 text-muted-foreground" />
                     )}
                   </Button>
-                  <Button variant="ghost" size="icon" className="w-7 h-7">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="w-7 h-7"
+                    onClick={() => window.open(publishedUrl, '_blank')}
+                  >
                     <ExternalLink className="w-3.5 h-3.5 text-muted-foreground" />
                   </Button>
                 </div>

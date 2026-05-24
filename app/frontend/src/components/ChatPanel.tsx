@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Send, Bot, User, FileCode, FileText, Braces, Square } from 'lucide-react';
+import { Send, Bot, FileCode, FileText, Braces, Square } from 'lucide-react';
 import { useAgentContext } from '@/contexts/AgentContext';
 import AgentMessageBubble from '@/components/AgentMessageBubble';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
@@ -295,6 +295,15 @@ export default function ChatPanel({
       buf.planData = planData;
       buf.completedAgents = Array.from(completedAgents.current);
     }
+    // Migrate plan-phase buffers to use the real conversation ID
+    if (prevId && !streamBuffers.current[prevId]) {
+      const planKey = Object.keys(streamBuffers.current).find(k => k.startsWith('_plan_'));
+      if (planKey) {
+        streamBuffers.current[prevId] = streamBuffers.current[planKey];
+        streamBuffers.current[prevId].planData = planData;
+        delete streamBuffers.current[planKey];
+      }
+    }
     if (prevId && messagesRef.current.length > 0 && !streamBuffers.current[prevId]) {
       const msgs = [...messagesRef.current];
       const pending = pendingStreamRef.current;
@@ -313,10 +322,10 @@ export default function ChatPanel({
     prevConvIdRef.current = currentConvId;
 
     let buf = currentConvId ? streamBuffers.current[currentConvId] : undefined;
-    // Fallback: search for any _exec_ buffer (new conversations that didn't have an ID at start)
+    // Fallback: search for _plan_ or _exec_ buffers (new conversations without an ID at start)
     if (!buf) {
-      const execKey = Object.keys(streamBuffers.current).find(k => k.startsWith('_exec_'));
-      if (execKey) buf = streamBuffers.current[execKey];
+      const fallbackKey = Object.keys(streamBuffers.current).find(k => k.startsWith('_plan_') || k.startsWith('_exec_'));
+      if (fallbackKey) buf = streamBuffers.current[fallbackKey];
     }
     if (buf) {
       setMessages(buf.messages);
@@ -906,9 +915,9 @@ export default function ChatPanel({
                       }
                       return u;
                     });
-                    const convId = requestConvIdRef.current;
-                    if (convId && streamBuffers.current[convId]) {
-                      streamBuffers.current[convId].planData = plan;
+                    // Update planData in the correct buffer (use streamConvId which matches how it was stored)
+                    if (streamConvId && streamBuffers.current[streamConvId]) {
+                      streamBuffers.current[streamConvId].planData = plan;
                     }
                   }
                   break;

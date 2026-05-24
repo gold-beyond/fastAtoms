@@ -30,6 +30,17 @@ router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 logger = logging.getLogger(__name__)
 
 
+def _sse_event(data: dict) -> bytes:
+    """Safely serialize a dict to an SSE event byte string.
+    Returns pre-encoded UTF-8 bytes to avoid any dependency on locale encoding."""
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
+
+
+def _safe_error(msg: str) -> str:
+    """Convert any message to an ASCII-safe string."""
+    return msg.encode("ascii", errors="replace").decode("ascii")
+
+
 @router.get("", response_model=AgentListResponse)
 async def list_agents(
     current_user: UserResponse = Depends(get_current_user),
@@ -57,10 +68,10 @@ async def chat_with_agent(
         )
         return AgentChatResponse(content=content, agent_id=request.agent_id)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=_safe_error(str(e)))
     except Exception as e:
         logger.error(f"Agent chat error: {e}")
-        raise HTTPException(status_code=502, detail=f"AI service error: {e}")
+        raise HTTPException(status_code=502, detail=f"AI service error: {_safe_error(str(e))}")
 
 
 @router.post("/team/chat", response_model=AgentChatResponse)
@@ -83,7 +94,7 @@ async def team_chat(
         )
     except Exception as e:
         logger.error(f"Team chat error: {e}")
-        raise HTTPException(status_code=502, detail=f"AI service error: {e}")
+        raise HTTPException(status_code=502, detail=f"AI service error: {_safe_error(str(e))}")
 
 
 @router.post("/team/chat/stream")
@@ -101,10 +112,14 @@ async def team_chat_stream(
                 messages=request.messages,
                 user_id=str(current_user.id),
             ):
-                yield f"data: {json.dumps(event)}\n\n"
+                yield _sse_event(event)
+        except UnicodeEncodeError as e:
+            err_msg = _safe_error(str(e))
+            logger.error(f"Team stream encoding error: {err_msg}")
+            yield _sse_event({"type": "error", "error": "Mike analysis failed: encoding error"})
         except Exception as e:
             logger.error(f"Team stream error: {e}")
-            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+            yield _sse_event({"type": "error", "error": _safe_error(str(e))})
         finally:
             logger.info("Team chat stream closed")
 
@@ -134,10 +149,14 @@ async def team_plan_stream(
                 messages=request.messages,
                 user_id=str(current_user.id),
             ):
-                yield f"data: {json.dumps(event)}\n\n"
+                yield _sse_event(event)
+        except UnicodeEncodeError as e:
+            err_msg = _safe_error(str(e))
+            logger.error(f"Team plan stream encoding error: {err_msg}")
+            yield _sse_event({"type": "error", "error": "Mike plan failed: encoding error"})
         except Exception as e:
             logger.error(f"Team plan stream error: {e}")
-            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+            yield _sse_event({"type": "error", "error": _safe_error(str(e))})
 
     return StreamingResponse(
         _event_stream(),
@@ -166,10 +185,14 @@ async def team_execute_stream(
                 plan=request.plan,
                 user_id=str(current_user.id),
             ):
-                yield f"data: {json.dumps(event)}\n\n"
+                yield _sse_event(event)
+        except UnicodeEncodeError as e:
+            err_msg = _safe_error(str(e))
+            logger.error(f"Team execute stream encoding error: {err_msg}")
+            yield _sse_event({"type": "error", "error": "Execute failed: encoding error"})
         except Exception as e:
             logger.error(f"Team execute stream error: {e}")
-            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+            yield _sse_event({"type": "error", "error": _safe_error(str(e))})
 
     return StreamingResponse(
         _event_stream(),
@@ -198,11 +221,15 @@ async def chat_with_agent_stream(
                 messages=request.messages,
                 user_id=str(current_user.id),
             ):
-                yield f"data: {json.dumps({'token': token})}\n\n"
-            yield f"data: {json.dumps({'done': True, 'agent_id': request.agent_id})}\n\n"
+                yield _sse_event({"token": token})
+            yield _sse_event({"done": True, "agent_id": request.agent_id})
+        except UnicodeEncodeError as e:
+            err_msg = _safe_error(str(e))
+            logger.error(f"Agent stream encoding error: {err_msg}")
+            yield _sse_event({"error": "Agent request encoding error"})
         except Exception as e:
             logger.error(f"Agent stream error: {e}")
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            yield _sse_event({"error": _safe_error(str(e))})
 
     return StreamingResponse(
         _event_stream(),

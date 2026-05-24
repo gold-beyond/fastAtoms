@@ -13,12 +13,6 @@ import ChatPanel from '@/components/ChatPanel';
 import CodeEditor from '@/components/CodeEditor';
 import PreviewPanel from '@/components/PreviewPanel';
 import PublishDialog from '@/components/PublishDialog';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 
 import ProjectSidebar from '@/components/ProjectSidebar';
@@ -93,6 +87,37 @@ function AppContent({ user, loading, logout, navigate, publishOpen, setPublishOp
   const [convSidebarCollapsed, setConvSidebarCollapsed] = useState(false);
   const [agentBarVisible, setAgentBarVisible] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [keyConfigured, setKeyConfigured] = useState(false);
+  const [keyOwner, setKeyOwner] = useState('');
+  const settingsBtnRef = useRef<HTMLDivElement>(null);
+
+  // Show settings button if no key configured, or current user is the owner
+  const canSeeSettings = !keyConfigured || (user && keyOwner === user.id);
+
+  // Close settings dropdown on click outside
+  useEffect(() => {
+    if (!showSettings) return;
+    const handler = (e: MouseEvent) => {
+      if (settingsBtnRef.current && !settingsBtnRef.current.contains(e.target as Node)) {
+        setShowSettings(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showSettings]);
+
+  // Check if key is configured globally and who owns it
+  useEffect(() => {
+    api.get('/api/v1/admin/settings/shared-key/deepseek').then((r: any) => {
+      if (r?.configured) {
+        setKeyConfigured(true);
+        setKeyOwner(r.owner || '');
+      } else {
+        setKeyConfigured(false);
+        setKeyOwner('');
+      }
+    }).catch(() => {});
+  }, [user]);
 
   const isLoggedIn = !!user;
 
@@ -298,14 +323,23 @@ function AppContent({ user, loading, logout, navigate, publishOpen, setPublishOp
         </div>
 
         <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground hover:text-foreground"
-            onClick={() => setShowSettings(true)}
-          >
-            <Settings className="w-4 h-4" />
-          </Button>
+          {canSeeSettings && (
+            <div className="relative" ref={settingsBtnRef}>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground hover:text-foreground"
+                onClick={() => setShowSettings(!showSettings)}
+              >
+                <Settings className="w-4 h-4" />
+              </Button>
+              {showSettings && (
+                <div className="absolute top-full right-0 mt-1 w-56 bg-white border border-border rounded-lg shadow-lg z-50 overflow-hidden p-3">
+                  <SettingsDropdown onSaved={() => { setKeyConfigured(true); setKeyOwner(user?.id || ''); setShowSettings(false); }} />
+                </div>
+              )}
+            </div>
+          )}
           <div className="relative">
             <Button
               variant="ghost"
@@ -443,6 +477,16 @@ function AppContent({ user, loading, logout, navigate, publishOpen, setPublishOp
             >
               预览
             </button>
+            <button
+              onClick={() => setRightPanelTab('editor')}
+              className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                rightPanelTab === 'editor'
+                  ? 'bg-primary/10 text-primary border border-primary/20'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+              }`}
+            >
+              代码
+            </button>
 
           </div>
 
@@ -460,23 +504,11 @@ function AppContent({ user, loading, logout, navigate, publishOpen, setPublishOp
       </div>
 
       <PublishDialog open={publishOpen} onOpenChange={setPublishOpen} />
-
-      <Dialog open={showSettings} onOpenChange={setShowSettings}>
-        <DialogContent className="bg-white border-border text-foreground sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="text-base flex items-center gap-2">
-              <Settings className="w-4 h-4" />
-              AI 配置
-            </DialogTitle>
-          </DialogHeader>
-          <SettingsPanel />
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
 
-function SettingsPanel() {
+function SettingsDropdown({ onSaved }: { onSaved: () => void }) {
   const [apiKey, setApiKey] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -493,37 +525,42 @@ function SettingsPanel() {
     setSaving(true);
     try {
       await api.put('/api/v1/admin/settings/shared-key/deepseek', { provider: 'deepseek', api_key: apiKey.trim() });
-      setConfigured(true);
       setSaved(true);
-      setApiKey('');
-      setTimeout(() => setSaved(false), 2000);
-    } catch {}
+      setTimeout(() => { onSaved(); }, 2000);
+    } catch (e: any) {
+      alert('保存失败: ' + (e?.message || '请检查网络或登录状态'));
+    }
     setSaving(false);
   };
 
   return (
-    <div className="space-y-4 py-2">
-      <p className="text-xs text-muted-foreground">
-        配置 DeepSeek API Key
-      </p>
-      {configured && (
-        <p className="text-[11px] text-emerald-600 font-medium">✅ 已配置 API Key，全局生效</p>
+    <div className="space-y-3">
+      {saved ? (
+        <div className="flex flex-col items-center gap-2 py-4">
+          <span className="text-2xl">✅</span>
+          <p className="text-sm font-medium text-emerald-600">配置成功，全局生效</p>
+          <p className="text-[10px] text-muted-foreground">窗口即将关闭...</p>
+        </div>
+      ) : (
+        <>
+          <p className="text-xs text-muted-foreground">配置 DeepSeek API Key</p>
+          <Input
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder="sk-..."
+            className="text-sm h-8"
+          />
+          <Button
+            size="sm"
+            className="w-full h-7 text-xs"
+            onClick={handleSave}
+            disabled={saving || !apiKey.trim()}
+          >
+            {saving ? '保存中...' : '保存'}
+          </Button>
+        </>
       )}
-      <Input
-        type="password"
-        value={apiKey}
-        onChange={(e) => setApiKey(e.target.value)}
-        placeholder="sk-..."
-        className="text-sm"
-      />
-      <Button
-        size="sm"
-        className="w-full h-8 text-xs"
-        onClick={handleSave}
-        disabled={saving || !apiKey.trim()}
-      >
-        {saving ? '保存中...' : saved ? '✅ 已保存' : '保存'}
-      </Button>
     </div>
   );
 }

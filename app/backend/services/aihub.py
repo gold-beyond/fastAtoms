@@ -10,7 +10,7 @@ import io
 import json
 import logging
 from pathlib import Path
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, List, Optional, Union
 
 import fitz
 from core.config import settings
@@ -94,6 +94,10 @@ class AIHubService:
             self.client = AsyncOpenAI(
                 api_key=settings.app_ai_key,
                 base_url=settings.app_ai_base_url.rstrip("/"),
+                http_client=httpx.AsyncClient(
+                    timeout=httpx.Timeout(60.0, connect=10.0),
+                    default_encoding="utf-8",
+                ),
             )
 
     def _require_ai_client(self) -> AsyncOpenAI:
@@ -306,7 +310,7 @@ class AIHubService:
         )
         return upload
 
-    async def _image_input_to_upload_files(self, image_input: str | list[str]) -> list[io.BytesIO]:
+    async def _image_input_to_upload_files(self, image_input: Union[str, List[str]]) -> list[io.BytesIO]:
         """
         Convert image input (single data URI or list of data URIs) into uploadable file objects.
 
