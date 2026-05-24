@@ -480,13 +480,22 @@ function SettingsPanel() {
   const [apiKey, setApiKey] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [configured, setConfigured] = useState(false);
+
+  useEffect(() => {
+    api.get('/api/v1/admin/settings/shared-key/deepseek').then((r: any) => {
+      if (r?.configured) setConfigured(true);
+    }).catch(() => {});
+  }, []);
 
   const handleSave = async () => {
     if (!apiKey.trim()) return;
     setSaving(true);
     try {
       await api.put('/api/v1/admin/settings/shared-key/deepseek', { provider: 'deepseek', api_key: apiKey.trim() });
+      setConfigured(true);
       setSaved(true);
+      setApiKey('');
       setTimeout(() => setSaved(false), 2000);
     } catch {}
     setSaving(false);
@@ -497,6 +506,9 @@ function SettingsPanel() {
       <p className="text-xs text-muted-foreground">
         配置 DeepSeek API Key
       </p>
+      {configured && (
+        <p className="text-[11px] text-emerald-600 font-medium">✅ 已配置 API Key，全局生效</p>
+      )}
       <Input
         type="password"
         value={apiKey}
