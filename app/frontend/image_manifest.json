@@ -1,22 +1,68 @@
-[
-  {
-    "filename": "atoms-logo-glow.png",
-    "url": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-22/pcdp5pyaagrq/atoms-logo-glow.png",
-    "description": "Atoms logo with glowing atomic particles"
-  },
-  {
-    "filename": "hero-bg-digital-particles.png",
-    "url": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-22/pcdqa4qaagsq/hero-bg-digital-particles.png",
-    "description": "Dark futuristic digital particles background"
-  },
-  {
-    "filename": "code-editor-mockup.png",
-    "url": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-22/pcdqdaaaagtq/code-editor-mockup.png",
-    "description": "Code editor mockup with syntax highlighting"
-  },
-  {
-    "filename": "deploy-rocket-launch.png",
-    "url": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-22/pcdqb5qaagta/deploy-rocket-launch.png",
-    "description": "Rocket launch deployment illustration"
-  }
-]
+{
+  "status": "success",
+  "results": [
+    {
+      "filename": "atoms-logo-glow.png",
+      "url": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-22/pcdp5pyaagrq/atoms-logo-glow.png",
+      "description": "Atoms logo with glowing atomic particles"
+    },
+    {
+      "filename": "hero-bg-digital-particles.png",
+      "url": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-22/pcdqa4qaagsq/hero-bg-digital-particles.png",
+      "description": "Dark futuristic digital particles background"
+    },
+    {
+      "filename": "code-editor-mockup.png",
+      "url": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-22/pcdqdaaaagtq/code-editor-mockup.png",
+      "description": "Code editor mockup with syntax highlighting"
+    },
+    {
+      "filename": "deploy-rocket-launch.png",
+      "url": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-22/pcdqb5qaagta/deploy-rocket-launch.png",
+      "description": "Rocket launch deployment illustration"
+    },
+    {
+      "status": "success",
+      "path": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-24/pfidnuqaagta/avatar-mike-team-leader.png",
+      "absolute_path": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-24/pfidnuqaagta/avatar-mike-team-leader.png",
+      "url": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-24/pfidnuqaagta/avatar-mike-team-leader.png",
+      "message": "Image generated successfully.\n\nNote: The image is on CDN and will be displayed automatically. Just describe what you created briefly, no need to mention filenames or URLs.",
+      "description": "Cartoon avatar of a male team leader named Mike, friendly confident expression, short dark hair, wearing a smart casual blue shirt, clean minimal style similar to tech platform avatars, solid color background, upper body portrait",
+      "style": "cartoon",
+      "filename": "avatar-mike-team-leader.png"
+    },
+    {
+      "status": "success",
+      "path": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-24/pfidoxqaagra/avatar-alex-engineer.png",
+      "absolute_path": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-24/pfidoxqaagra/avatar-alex-engineer.png",
+      "url": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-24/pfidoxqaagra/avatar-alex-engineer.png",
+      "message": "Image generated successfully.\n\nNote: The image is on CDN and will be displayed automatically. Just describe what you created briefly, no need to mention filenames or URLs.",
+      "description": "Cartoon avatar of a male engineer named Alex, focused creative expression, medium brown hair slightly messy, wearing a dark hoodie with headphones around neck, clean minimal style similar to tech platform avatars, solid color background, upper body portrait",
+      "style": "cartoon",
+      "filename": "avatar-alex-engineer.png"
+    },
+    {
+      "status": "success",
+      "path": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-24/pfidmfqaagsq/avatar-emma-product-manager.png",
+      "absolute_path": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-24/pfidmfqaagsq/avatar-emma-product-manager.png",
+      "url": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-24/pfidmfqaagsq/avatar-emma-product-manager.png",
+      "message": "Image generated successfully.\n\nNote: The image is on CDN and will be displayed automatically. Just describe what you created briefly, no need to mention filenames or URLs.",
+      "description": "Cartoon avatar of a female product manager named Emma, warm professional smile, shoulder-length auburn hair, wearing a light purple blouse, clean minimal style similar to tech platform avatars, solid color background, upper body portrait",
+      "style": "cartoon",
+      "filename": "avatar-emma-product-manager.png"
+    },
+    {
+      "status": "success",
+      "path": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-24/pfidmwyaagsa/avatar-user-default.png",
+      "absolute_path": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-24/pfidmwyaagsa/avatar-user-default.png",
+      "url": "https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-24/pfidmwyaagsa/avatar-user-default.png",
+      "message": "Image generated successfully.\n\nNote: The image is on CDN and will be displayed automatically. Just describe what you created briefly, no need to mention filenames or URLs.",
+      "description": "Cartoon avatar of a generic user, friendly approachable expression, neutral features, short dark hair, wearing a simple gray t-shirt, clean minimal style similar to tech platform avatars, solid color background, upper body portrait",
+      "style": "cartoon",
+      "filename": "avatar-user-default.png"
+    }
+  ],
+  "success_count": 4,
+  "failed_count": 0,
+  "message": "Generated 4/4 images"
+}

@@ -23,7 +23,7 @@ export default function AgentMessageBubble({ agent, content, status, taskTitle, 
     <div className="flex gap-3 justify-start fade-in-up group">
       {/* Agent Avatar */}
       <div className="flex-shrink-0 flex flex-col items-center gap-1">
-        <Avatar className="w-7 h-7">
+        <Avatar className="w-8 h-8 ring-2 ring-accent/20">
           <AvatarImage src={agent.avatarUrl} alt={agent.name} className="object-cover" />
           <AvatarFallback className={`bg-gradient-to-br ${agent.avatarColor} text-[10px] text-white font-bold`}>
             {agent.name[0]}

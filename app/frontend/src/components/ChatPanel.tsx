@@ -6,7 +6,7 @@ import { Send, Bot, User, FileCode, FileText, Braces, Square } from 'lucide-reac
 import { useAgentContext } from '@/contexts/AgentContext';
 import AgentMessageBubble from '@/components/AgentMessageBubble';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
-import { AgentDef } from '@/types/agent';
+import { AgentDef, AVATAR_URLS } from '@/types/agent';
 import { api } from '@/lib/simpleApi';
 import { getLocalConversations, saveLocalConversations } from '@/lib/conversationUtils';
 import Markdown from 'markdown-to-jsx';
@@ -1090,8 +1090,8 @@ export default function ChatPanel({
                 }`}
               >
                 {msg.role === 'assistant' && (
-                  <Avatar className="w-7 h-7">
-                    <AvatarImage src={agentsMapRef.current[msg.agentId || '']?.avatarUrl} alt="AI" className="object-cover" />
+                  <Avatar className="w-8 h-8 ring-2 ring-accent/20">
+                    <AvatarImage src={agentsMapRef.current[msg.agentId || '']?.avatarUrl || AVATAR_URLS.alex} alt="AI" className="object-cover" />
                     <AvatarFallback className="bg-gradient-to-br from-primary to-accent text-[10px] text-white font-bold">
                       AI
                     </AvatarFallback>
@@ -1136,8 +1136,8 @@ export default function ChatPanel({
                   )}
                 </div>
                 {msg.role === 'user' && (
-                  <Avatar className="w-7 h-7">
-                    <AvatarImage src="/avatars/user.svg" alt="You" className="object-cover" />
+                  <Avatar className="w-8 h-8 ring-2 ring-primary/20">
+                    <AvatarImage src={AVATAR_URLS.user} alt="You" className="object-cover" />
                     <AvatarFallback className="bg-gradient-to-br from-yellow-400 to-amber-500 text-[10px] text-white font-bold">
                       Me
                     </AvatarFallback>

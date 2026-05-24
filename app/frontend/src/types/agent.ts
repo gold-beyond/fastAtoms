@@ -56,13 +56,20 @@ export type TeamStreamEvent =
   | { type: 'done' }
   | { type: 'error'; error: string };
 
+export const AVATAR_URLS = {
+  mike: 'https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-24/pfidnuqaagta/avatar-mike-team-leader.png',
+  alex: 'https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-24/pfidoxqaagra/avatar-alex-engineer.png',
+  emma: 'https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-24/pfidmfqaagsq/avatar-emma-product-manager.png',
+  user: 'https://mgx-backend-cdn.metadl.com/generate/images/1263427/2026-05-24/pfidmwyaagsa/avatar-user-default.png',
+} as const;
+
 export const DEFAULT_AGENTS: AgentDef[] = [
   {
     id: 'mike',
     name: 'Mike',
     role: 'Team Leader',
     avatarColor: 'from-orange-400 to-amber-500',
-    avatarUrl: '/avatars/mike.svg?v=3',
+    avatarUrl: AVATAR_URLS.mike,
     systemPrompt: '',
     skills: ['任务分解', '团队协调', '需求分析'],
     isBuiltin: true,
@@ -72,7 +79,7 @@ export const DEFAULT_AGENTS: AgentDef[] = [
     name: 'Alex',
     role: 'Engineer',
     avatarColor: 'from-blue-500 to-blue-600',
-    avatarUrl: '/avatars/alex.svg?v=12',
+    avatarUrl: AVATAR_URLS.alex,
     skills: ['代码开发', 'Bug修复', '部署'],
     systemPrompt: '',
     isBuiltin: true,
@@ -82,7 +89,7 @@ export const DEFAULT_AGENTS: AgentDef[] = [
     name: 'Emma',
     role: 'Product Manager',
     avatarColor: 'from-pink-400 to-rose-500',
-    avatarUrl: '/avatars/emma.svg?v=4',
+    avatarUrl: AVATAR_URLS.emma,
     skills: ['PRD', '竞品分析', '用户研究'],
     systemPrompt: '',
     isBuiltin: true,

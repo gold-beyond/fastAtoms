@@ -28,7 +28,7 @@ export default function AgentCard({ agent, isActive, status, onClick }: AgentCar
     >
       {/* Avatar */}
       <div className="w-8 h-8 rounded-full relative flex-shrink-0">
-        <Avatar className="w-8 h-8">
+        <Avatar className="w-8 h-8 ring-2 ring-accent/20">
           <AvatarImage src={agent.avatarUrl} alt={agent.name} className="object-cover" />
           <AvatarFallback className={`bg-gradient-to-br ${agent.avatarColor}`}>
             <span className="text-xs text-white font-bold">{agent.name[0]}</span>
