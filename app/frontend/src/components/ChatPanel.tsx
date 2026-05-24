@@ -44,7 +44,7 @@ interface ChatPanelProps {
 }
 
 const SYSTEM_PROMPT =
-  '你是 Atoms 平台的 AI 编程助手。你可以帮助用户生成代码、解答编程问题、设计网页和应用。当用户要求你创建网页或应用时，请生成完整的 HTML、CSS 和 JavaScript 代码，使用 markdown 代码块包裹（```html、```css、```javascript）。请用中文回复。';
+  '你是 fastAtoms 平台的 AI 编程助手。你可以帮助用户生成代码、解答编程问题、设计网页和应用。当用户要求你创建网页或应用时，请生成完整的 HTML、CSS 和 JavaScript 代码，使用 markdown 代码块包裹（```html、```css、```javascript）。请用中文回复。';
 
 const SUGGESTED_PROMPTS = [
   '开发一个贪吃蛇小游戏',
@@ -945,7 +945,7 @@ export default function ChatPanel({
       } else if (effectiveAgentId) {
         const agentInfo = agentsMapRef.current[effectiveAgentId];
         const agentSystemPrompt = agentInfo
-          ? `你是 ${agentInfo.name}，${agentInfo.description || 'Atoms 平台的 AI 助手'}。${SYSTEM_PROMPT}`
+          ? `你是 ${agentInfo.name}，${agentInfo.description || 'fastAtoms 平台的 AI 助手'}。${SYSTEM_PROMPT}`
           : SYSTEM_PROMPT;
         const agentMessages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
           { role: 'system', content: agentSystemPrompt },

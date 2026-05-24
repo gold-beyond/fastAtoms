@@ -82,11 +82,11 @@ export default function LoginPage() {
           <div className="flex flex-col items-center gap-3">
             <img
               src={LOGO_URL}
-              alt="Atoms Logo"
+              alt="fastAtoms Logo"
               className="w-12 h-12 rounded-lg"
             />
             <span className="text-lg font-semibold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
-              Atoms
+              fastAtoms
             </span>
           </div>
 

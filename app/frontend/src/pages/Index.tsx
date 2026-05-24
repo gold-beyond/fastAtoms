@@ -286,11 +286,11 @@ function AppContent({ user, loading, logout, navigate, publishOpen, setPublishOp
         <div className="flex items-center gap-3">
           <img
             src={LOGO_URL}
-            alt="Atoms Logo"
+            alt="fastAtoms Logo"
             className="w-7 h-7 rounded"
           />
           <span className="text-sm font-semibold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
-            Atoms
+            fastAtoms
           </span>
           <span className="text-xs text-muted-foreground px-2 py-0.5 bg-muted rounded border border-border">
             {currentProject?.name || '现代化 Landing Page'}

@@ -8,3 +8,4 @@ vite.config.ts.timestamp-*
 .env
 *.db
 .trae/
+temp_doc.md
