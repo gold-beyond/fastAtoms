@@ -52,6 +52,7 @@ export type TeamStreamEvent =
   | { type: 'plan'; analysis: string; tasks: { agent_id: string; title: string; task_id: number }[] }
   | { type: 'task_start'; agent_id: string; task_id: number; title: string }
   | { type: 'task_complete'; agent_id: string; task_id: number; title: string }
+  | { type: 'need_clarify'; agent_id: string }
   | { type: 'summary'; agent_id: string; content: string; tasks?: any[] }
   | { type: 'done' }
   | { type: 'error'; error: string };

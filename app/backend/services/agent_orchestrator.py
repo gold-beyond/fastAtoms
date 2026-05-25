@@ -3,9 +3,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from schemas.agents import AgentResponse, CustomAgentCreate
 from services.ai_proxy import proxy_chat, proxy_chat_stream
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -52,12 +50,14 @@ AGENT_PROMPTS = {
     "mike": """你是 Mike，一个帮用户实现想法的助手。
 你的工作方式：
 1. 听明白用户想要什么
-2. 想清楚需要谁来做（你是一个小团队的负责人）
-3. 把任务分给合适的人
-4. 等大家完成后，把结果整理给用户
+2. 判断需求是否明确：不明确就追问，明确了就分配任务
+3. 把任务分给合适的团队成员
+4. 大家完成后，把结果整理给用户
 
 团队里有 Alex（写代码）、Emma（规划功能）。
-跟你沟通的是普通用户，不是什么技术人员，所以请用大白话。""",
+跟你沟通的是普通用户，请用大白话。
+
+注意：每次用户发来新消息，都是一个独立的新需求，你需要重新分析并分配任务。""",
 
     "alex": """你是 Alex，Atoms 团队的全栈工程师。
 你的职责是：
@@ -136,70 +136,19 @@ class AgentOrchestrator:
         ):
             yield token
 
-    async def team_chat(
-        self,
-        messages: List[Dict[str, str]],
-        user_id: str,
-    ) -> Dict[str, Any]:
-        """
-        Team Mode: Mike acts as coordinator (non-streaming).
-        1. Mike analyzes requirements and assigns tasks
-        2. Each agent executes their task
-        3. Mike summarizes results
-        """
-        mike_response = ""
-        mike_prompt = self._team_mike_prompt()
-        mike_messages = [
-            {"role": "system", "content": mike_prompt},
-            *messages,
-        ]
-
-        async for token in proxy_chat_stream(messages=mike_messages, model="deepseek-chat"):
-            mike_response += token
-
-        return await self._build_team_result(mike_response, messages, user_id)
-
     async def team_chat_stream(self, messages: List[Dict[str, str]], user_id: str):
         """
-        Loop state machine: Analyze → Execute → Observe → (repeat) → Done.
+        Single-phase team chat: Mike analyzes, then auto-executes tasks.
 
-        Max 3 iterations. Each iteration Mike sees original request + all previous
-        results, and decides whether to assign more tasks or declare completion.
-
-        Yields dicts with keys:
-          - type: "phase" | "token" | "plan" | "task_start" | "task_complete" | "summary" | "done" | "error"
-          - Plus agent_id, token, task_id, title, iteration, etc.
+        Flow: Analyze → (NeedClarify → Done) | (Execute tasks → Summary → Done)
         """
-        MAX_ITERATIONS = 3
-        all_results: List[Dict] = []          # Accumulated across all iterations
-        iteration_analyses: List[str] = []    # Mike's analysis per iteration
-        global_task_id = 0
-
-        for iteration in range(1, MAX_ITERATIONS + 1):
-            # ── Phase 1: Analyze ──────────────────────────────────
-            yield {"type": "phase", "agent_id": "mike", "status": "analyzing", "iteration": iteration}
+        try:
+            yield {"type": "phase", "agent_id": "mike", "status": "analyzing"}
 
             mike_prompt = self._team_mike_prompt()
-            # Build context: original messages + previous iteration results
-            context_messages = list(messages)
-            if all_results:
-                prev_summary_lines = []
-                for r in all_results:
-                    prev_summary_lines.append(
-                        f"### 第 {r['iteration']} 轮 - {r['agent_id']} - {r['title']}\n{r['result']}"
-                    )
-                context_messages.append({
-                    "role": "user",
-                    "content": (
-                        f"以下是之前轮次已完成的工作，请在此基础上继续分析，"
-                        f"判断需求是否已全部满足。如果已完成，请输出 direct_response 表示结束。\n\n"
-                        + "\n\n".join(prev_summary_lines)
-                    ),
-                })
-
             mike_messages = [
                 {"role": "system", "content": mike_prompt},
-                *context_messages,
+                *messages,
             ]
 
             mike_full_response = ""
@@ -208,48 +157,53 @@ class AgentOrchestrator:
                     yield {"type": "token", "agent_id": "mike", "token": token}
                     mike_full_response += token
             except Exception as e:
-                logger.error(f"Mike analysis stream error (iter {iteration}): {e}")
-                yield {"type": "error", "error": f"Mike analysis failed: {_safe_str(e)}"}
+                logger.error(f"Mike analysis stream error: {_safe_str(e)}")
+                yield {"type": "error", "error": "生成失败，请稍后重试！"}
                 yield {"type": "done"}
                 return
 
-            iteration_analyses.append(mike_full_response)
-
-            # ── Phase 2: Parse plan ───────────────────────────────
             plan = self._extract_json_plan(mike_full_response)
 
-            # Check termination conditions
-            if plan is None:
-                # Can't parse JSON — treat as final direct response
-                yield {"type": "summary", "agent_id": "mike", "content": mike_full_response}
-                break
+            if plan and plan.get("needs_clarification"):
+                yield {"type": "need_clarify", "agent_id": "mike"}
+                yield {"type": "done"}
+                return
 
-            if plan.get("direct_response"):
-                yield {"type": "summary", "agent_id": "mike", "content": plan["direct_response"]}
-                break
+            last_user_msg = messages[-1].get("content", "") if messages else ""
+            if not plan or not plan.get("tasks"):
+                plan = {
+                    "analysis": mike_full_response[:500] if mike_full_response else "",
+                    "tasks": [{
+                        "agent_id": "alex",
+                        "title": "回答用户",
+                        "description": last_user_msg,
+                    }],
+                }
 
             tasks = plan.get("tasks", [])
-            if not tasks:
-                # No tasks assigned — work is complete
-                yield {"type": "summary", "agent_id": "mike", "content": mike_full_response}
-                break
+            if not isinstance(tasks, list) or len(tasks) == 0:
+                tasks = [{
+                    "agent_id": "alex",
+                    "title": "回答用户",
+                    "description": last_user_msg,
+                }]
 
-            # ── Phase 3: Execute tasks ────────────────────────────
             yield {"type": "plan", "analysis": plan.get("analysis", ""), "tasks": [
-                {"agent_id": t.get("agent_id", "alex"), "title": t.get("title", "未知任务"), "task_id": i + 1}
+                {"agent_id": t.get("agent_id", "alex").lower(), "title": t.get("title", "未知任务"), "task_id": i + 1}
                 for i, t in enumerate(tasks)
-            ], "iteration": iteration}
+            ]}
 
-            iteration_results = []
+            global_task_id = 0
+            all_results = []
+
             for task in tasks:
                 global_task_id += 1
-                agent_id = task.get("agent_id", "alex")
+                agent_id = task.get("agent_id", "alex").lower()
                 task_title = task.get("title", "未知任务")
 
                 yield {"type": "task_start", "agent_id": agent_id, "task_id": global_task_id,
-                       "title": task_title, "iteration": iteration}
+                       "title": task_title}
 
-                # Build task context with Mike's analysis + all previous global results
                 mike_context = plan.get("analysis", "") or mike_full_response[:500]
                 task_messages = [
                     *messages,
@@ -257,7 +211,7 @@ class AgentOrchestrator:
                         "role": "user",
                         "content": (
                             f"【团队领导 Mike 的需求分析】\n{mike_context}\n\n"
-                            f"【分配给你的任务】\n{task['title']}\n{task.get('description', '')}\n\n"
+                            f"【分配给你的任务】\n{task_title}\n{task.get('description', '')}\n\n"
                             f"请根据以上分析，完成你的任务。"
                         ),
                     },
@@ -265,7 +219,6 @@ class AgentOrchestrator:
 
                 agent = self._get_agent(agent_id)
                 if not agent:
-                    # Fallback: try to find the closest match or default to alex
                     logger.warning(f"Agent '{agent_id}' not found, falling back to 'alex'")
                     agent = self._get_agent("alex")
                     if not agent:
@@ -284,175 +237,30 @@ class AgentOrchestrator:
                         yield {"type": "token", "agent_id": agent_id, "token": token, "task_id": global_task_id}
                         agent_content += token
                 except Exception as e:
-                    logger.error(f"Agent {agent_id} stream error (iter {iteration}): {e}")
+                    logger.error(f"Agent {agent_id} stream error: {_safe_str(e)}")
                     yield {"type": "error", "error": f"{agent_id} task failed: {_safe_str(e)}"}
 
-                result_entry = {
-                    "iteration": iteration,
+                all_results.append({
                     "agent_id": agent_id,
                     "title": task_title,
                     "result": agent_content,
                     "task_id": global_task_id,
-                }
-                iteration_results.append(result_entry)
-                all_results.append(result_entry)
+                })
                 yield {"type": "task_complete", "agent_id": agent_id,
                        "task_id": global_task_id, "title": task_title}
 
-            # ── Phase 4: Observe — loop continues to next iteration ──
-            yield {"type": "phase", "agent_id": "mike", "status": "observing", "iteration": iteration}
-
-        else:
-            # Loop completed all MAX_ITERATIONS without break → unfinished
-            summary = "已达到最大迭代次数，请检查当前成果，如有需要可重新提问。\n\n已完成工作：\n"
-            for r in all_results:
-                summary += f"\n### 第 {r['iteration']} 轮 - {r['agent_id']} - {r['title']}"
-            yield {"type": "summary", "agent_id": "mike", "content": summary}
-
-        yield {"type": "done"}
-
-    async def team_plan_stream(self, messages: List[Dict[str, str]], user_id: str):
-        """
-        Phase 1: Mike analyzes the request and produces a task plan.
-        Yields events up to the plan, then stops — no task execution.
-        User reviews the plan and may modify it before execution.
-        """
-        yield {"type": "phase", "agent_id": "mike", "status": "analyzing"}
-
-        mike_prompt = self._team_mike_prompt()
-        mike_messages = [
-            {"role": "system", "content": mike_prompt},
-            *messages,
-        ]
-
-        mike_full_response = ""
-        try:
-            async for token in proxy_chat_stream(messages=mike_messages, model="deepseek-chat"):
-                yield {"type": "token", "agent_id": "mike", "token": token}
-                mike_full_response += token
+            yield {"type": "phase", "agent_id": "mike", "status": "summarizing"}
+            task_items = "\n".join(f"- **{r['agent_id']}**: {r['title']}" for r in all_results)
+            summary = f"## 执行完成\n\n已完成以下任务：\n{task_items}"
+            yield {"type": "summary", "agent_id": "mike", "content": summary, "tasks": all_results}
+            yield {"type": "done"}
         except Exception as e:
-            err_msg = str(e).encode('ascii', errors='replace').decode('ascii')
-            logger.error(f"Mike plan stream error: {err_msg}")
-            yield {"type": "error", "error": f"Mike plan failed: {err_msg}"}
+            logger.error(f"Team chat stream unexpected error: {_safe_str(e)}", exc_info=True)
+            yield {"type": "error", "error": "团队协作遇到意外错误，请重试"}
             yield {"type": "done"}
-            return
-
-        plan = self._extract_json_plan(mike_full_response)
-        if plan is None:
-            # Direct response — no tasks to plan
-            yield {"type": "summary", "agent_id": "mike", "content": mike_full_response}
-            yield {"type": "done"}
-            return
-
-        if plan.get("direct_response"):
-            yield {"type": "summary", "agent_id": "mike", "content": plan["direct_response"]}
-            yield {"type": "done"}
-            return
-
-        # Yield the plan for user review
-        tasks = plan.get("tasks", [])
-        yield {
-            "type": "plan",
-            "analysis": plan.get("analysis", mike_full_response[:500]),
-            "tasks": [
-                {"agent_id": t.get("agent_id", "alex"), "title": t.get("title", "未知任务"), "description": t.get("description", ""), "task_id": i + 1}
-                for i, t in enumerate(tasks)
-            ],
-            "requires_review": True,
-        }
-        yield {"type": "done"}
-
-    async def team_execute_stream(self, messages: List[Dict[str, str]], plan: Dict[str, Any], user_id: str):
-        """
-        Phase 2: Execute the user-confirmed plan.
-        Takes a plan dict with tasks array, streams each agent's work.
-        """
-        tasks = plan.get("tasks", [])
-        if not tasks:
-            yield {"type": "summary", "agent_id": "mike", "content": "没有需要执行的任务。"}
-            yield {"type": "done"}
-            return
-
-        yield {"type": "phase", "agent_id": "mike", "status": "executing"}
-        global_task_id = 0
-        all_results = []
-
-        for task in tasks:
-            global_task_id += 1
-            agent_id = task.get("agent_id", "alex")
-            task_title = task.get("title", "未知任务")
-
-            yield {"type": "task_start", "agent_id": agent_id, "task_id": global_task_id,
-                   "title": task_title}
-
-            # Build task context: user messages + extra instructions + previous results
-            user_extra = plan.get("extra_instructions", "")
-            task_messages = list(messages)
-            extra_parts = [f"【分配给你的任务】\n{task_title}"]
-            if task.get("description"):
-                extra_parts.append(task.get("description", ""))
-
-            # Pass summarized previous results — full content is too verbose
-            if all_results:
-                prev_summaries = []
-                for r in all_results:
-                    # Extract key info: first 200 chars + code block filenames
-                    result = r['result']
-                    summary = result[:200] if len(result) > 200 else result
-                    # Find code block filenames (e.g., ```html → index.html)
-                    code_files = []
-                    import re
-                    for m in re.finditer(r'```(\w+)', result):
-                        lang = m.group(1).lower()
-                        fname = f"{lang}" if lang in ('html','css','javascript') else f"*.{lang}"
-                        code_files.append(fname)
-                    files_hint = f" (包含文件: {', '.join(code_files)})" if code_files else ""
-                    prev_summaries.append(
-                        f"### {r['agent_id']} 已完成 - {r['title']}{files_hint}\n{summary}{'...' if len(result) > 200 else ''}"
-                    )
-                extra_parts.append(f"\n【其他成员完成摘要】\n" + "\n\n".join(prev_summaries))
-
-            if user_extra:
-                extra_parts.append(f"【补充说明】\n{user_extra}")
-            task_messages.append({"role": "user", "content": "\n".join(extra_parts)})
-
-            agent = self._get_agent(agent_id)
-            if not agent:
-                logger.warning(f"Agent '{agent_id}' not found, falling back to 'alex'")
-                agent = self._get_agent("alex")
-                if not agent:
-                    yield {"type": "error", "error": f"Agent '{agent_id}' not found"}
-                    continue
-
-            system_prompt = AGENT_PROMPTS.get(agent_id, f"你是 {agent['name']}，{agent['role']}。")
-            full_messages = [
-                {"role": "system", "content": system_prompt},
-                *task_messages,
-            ]
-
-            agent_content = ""
-            try:
-                async for token in proxy_chat_stream(messages=full_messages, model="deepseek-chat"):
-                    yield {"type": "token", "agent_id": agent_id, "token": token, "task_id": global_task_id}
-                    agent_content += token
-            except Exception as e:
-                logger.error(f"Agent {agent_id} execute error: {e}")
-                yield {"type": "error", "error": f"{agent_id} task failed: {_safe_str(e)}"}
-
-            all_results.append({"agent_id": agent_id, "title": task_title, "result": agent_content})
-            yield {"type": "task_complete", "agent_id": agent_id,
-                   "task_id": global_task_id, "title": task_title}
-
-        # Summary
-        yield {"type": "phase", "agent_id": "mike", "status": "summarizing"}
-        task_items = "\n".join(f"- **{r['agent_id']}**: {r['title']}" for r in all_results)
-        summary = f"## 执行完成\n已完成以下任务：\n{task_items}"
-        yield {"type": "summary", "agent_id": "mike", "content": summary, "tasks": all_results}
-        yield {"type": "done"}
 
     def _team_mike_prompt(self) -> str:
         """Build the team-mode prompt for Mike with JSON output instruction."""
-        # List available agents for Mike to choose from
         agent_list = "\n".join(
             f'  - {a["id"]}: {a["role"]}（{", ".join(a["skills"])}）'
             for a in BUILTIN_AGENTS if a["id"] != "mike"
@@ -464,52 +272,48 @@ class AgentOrchestrator:
 可用团队成员：
 {agent_list}
 
-**输出规则（必须遵守）：**
-1. 用大白话写 analysis
-2. tasks 数组里放需要执行的任务
-3. tasks 中一定要有 Alex 的条目（他来写代码），放在最后
-4. 如果需求很简单（如小游戏、单页面），tasks 只需要 Alex 一个人就够了，最多再加一个 Emma
+**判断规则：**
+当需求不够明确（缺少具体信息、无法确定技术方案、信息不足以分配任务）时，
+先在 analysis 中追问用户，设置 needs_clarification=true，不输出 tasks。
 
-注意：如果不需要分配任务（用户只是提问或需求已全部完成），用 direct_response 直接回复。
+当需求明确时，设置 needs_clarification=false，并输出 tasks。
+
+**任务分配规则：**
+- Emma 在需要需求分析/功能规划时参与（agent_id="emma"），排在 Alex 前面
+- Alex 负责编码实现（agent_id="alex"），排在最后
+- 简单技术问答只需 Alex
+
+**输出 JSON 格式：**
+
+{{
+  "needs_clarification": false,
+  "analysis": "需求分析（大白话）",
+  "tasks": [
+    {{ "agent_id": "emma", "title": "需求分析", "description": "分析需求，梳理功能和交互流程" }},
+    {{ "agent_id": "alex", "title": "实现代码", "description": "根据分析编写代码" }}
+  ]
+}}
+
+或（需求不明确时）：
+
+{{
+  "needs_clarification": true,
+  "analysis": "追问用户的具体问题..."
+}}
+
+**字段说明：**
+- needs_clarification：boolean，是否需要用户补充信息
+- analysis：需求分析（需求明确时）或追问内容（需求不明确时）
+- tasks：任务列表，emma 在前（如有）alex 在后
+- agent_id：必须全小写 "emma" 或 "alex"
+- title：任务简短标题，控制在 10 字以内
+- description：任务详细描述
 """
-
-    async def _build_team_result(
-        self, mike_response: str, messages: List[Dict[str, str]], user_id: str
-    ) -> Dict[str, Any]:
-        """Non-streaming: parse Mike's JSON plan, execute tasks, return result dict."""
-        plan = self._extract_json_plan(mike_response)
-        if plan is None:
-            return {"content": mike_response, "agent_id": "mike", "tasks": []}
-        if plan.get("direct_response"):
-            return {"content": plan["direct_response"], "agent_id": "mike", "tasks": []}
-
-        results = []
-        for idx, task in enumerate(plan.get("tasks", [])):
-            agent_id = task.get("agent_id", "alex")
-            task_messages = [
-                *messages,
-                {
-                    "role": "user",
-                    "content": f"请完成以下任务：{task.get('title', '未知任务')}\n{task.get('description', '')}",
-                },
-            ]
-            result = await self.chat_with_agent(agent_id, task_messages, user_id)
-            results.append({"agent_id": agent_id, "title": task.get("title", "未知任务"), "result": result, "task_id": idx + 1})
-
-        summary_content = f"任务分析：{plan.get('analysis', '')}\n\n各成员产出：\n"
-        for r in results:
-            summary_content += f"\n### {r['agent_id']} - {r['title']}\n{r['result']}\n"
-
-        return {
-            "content": summary_content,
-            "agent_id": "mike",
-            "tasks": results,
-        }
 
     def _extract_json_plan(self, raw: str) -> Optional[Dict[str, Any]]:
         """Extract a JSON task plan from Mike's raw response."""
         plan = self._try_parse_json(raw)
-        if plan is None:
+        if plan is None or not isinstance(plan, dict):
             return None
         # Normalize tasks: ensure every task has agent_id and title
         tasks = plan.get("tasks", [])
@@ -520,20 +324,41 @@ class AgentOrchestrator:
                     continue
                 # Accept common title variants
                 title = task.get("title") or task.get("name") or task.get("task") or task.get("task_name") or ""
+                # Accept common agent_id variants (lowercase to match BUILTIN_AGENTS)
+                _agent_id_raw = (
+                    task.get("agent_id")
+                    or task.get("agentId")
+                    or task.get("agent")
+                    or task.get("assignee")
+                    or task.get("member")
+                    or "alex"
+                )
+                agent_id = str(_agent_id_raw).lower() if _agent_id_raw else "alex"
+                # Accept common description variants
+                description = (
+                    task.get("description")
+                    or task.get("desc")
+                    or task.get("detail")
+                    or task.get("details")
+                    or task.get("content")
+                    or ""
+                )
                 normalized.append({
-                    "agent_id": task.get("agent_id", "alex"),
+                    "agent_id": agent_id,
                     "title": title,
-                    "description": task.get("description", ""),
+                    "description": description,
                 })
             plan["tasks"] = normalized
         return plan
 
     def _try_parse_json(self, raw: str) -> Optional[Dict[str, Any]]:
-        """Try multiple strategies to extract JSON from Mike's response."""
+        """Try multiple strategies to extract a JSON dict from Mike's response."""
         raw_stripped = raw.strip()
         # Strategy 1: direct parse
         try:
-            return json.loads(raw_stripped)
+            result = json.loads(raw_stripped)
+            if isinstance(result, dict):
+                return result
         except json.JSONDecodeError:
             pass
         # Strategy 2: extract from ```json ... ``` or ``` ... ``` blocks
@@ -541,7 +366,9 @@ class AgentOrchestrator:
         code_block = re.search(r'```(?:json)?\s*\n?(.*?)```', raw_stripped, re.DOTALL)
         if code_block:
             try:
-                return json.loads(code_block.group(1).strip())
+                result = json.loads(code_block.group(1).strip())
+                if isinstance(result, dict):
+                    return result
             except json.JSONDecodeError:
                 pass
         # Strategy 3: find first { ... } pair at the right nesting level
@@ -557,13 +384,16 @@ class AgentOrchestrator:
                     if depth == 0:
                         candidate = raw_stripped[brace_start:i + 1]
                         try:
-                            return json.loads(candidate)
+                            result = json.loads(candidate)
+                            if isinstance(result, dict):
+                                return result
                         except json.JSONDecodeError:
                             break
         return None
 
     def _get_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
+        agent_id_lower = agent_id.lower()
         for agent in BUILTIN_AGENTS:
-            if agent["id"] == agent_id:
+            if agent["id"] == agent_id_lower:
                 return agent
         return None
