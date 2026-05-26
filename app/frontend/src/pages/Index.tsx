@@ -92,8 +92,6 @@ function AppContent({ user, loading, logout, navigate, publishOpen, setPublishOp
   const settingsBtnRef = useRef<HTMLDivElement>(null);
 
   // Show settings button if no key configured, or current user is the owner
-  const canSeeSettings = !keyConfigured || (user && keyOwner === user.id);
-
   // Close settings dropdown on click outside
   useEffect(() => {
     if (!showSettings) return;
@@ -323,23 +321,24 @@ function AppContent({ user, loading, logout, navigate, publishOpen, setPublishOp
         </div>
 
         <div className="flex items-center gap-2">
-          {canSeeSettings && (
-            <div className="relative" ref={settingsBtnRef}>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-muted-foreground hover:text-foreground"
-                onClick={() => setShowSettings(!showSettings)}
-              >
-                <Settings className="w-4 h-4" />
-              </Button>
-              {showSettings && (
-                <div className="absolute top-full right-0 mt-1 w-56 bg-white border border-border rounded-lg shadow-lg z-50 overflow-hidden p-3">
-                  <SettingsDropdown onSaved={() => { setKeyConfigured(true); setKeyOwner(user?.id || ''); setShowSettings(false); }} />
-                </div>
-              )}
-            </div>
-          )}
+          <div className="relative" ref={settingsBtnRef}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground hover:text-foreground"
+              onClick={() => setShowSettings(!showSettings)}
+            >
+              <Settings className="w-4 h-4" />
+            </Button>
+            {showSettings && (
+              <div className="absolute top-full right-0 mt-1 w-56 bg-white border border-border rounded-lg shadow-lg z-50 overflow-hidden p-3">
+                <SettingsDropdown
+                  configured={keyConfigured}
+                  onSaved={() => { setKeyConfigured(true); setKeyOwner(user?.id || ''); setShowSettings(false); }}
+                />
+              </div>
+            )}
+          </div>
           <div className="relative">
             <Button
               variant="ghost"
@@ -508,17 +507,11 @@ function AppContent({ user, loading, logout, navigate, publishOpen, setPublishOp
   );
 }
 
-function SettingsDropdown({ onSaved }: { onSaved: () => void }) {
+function SettingsDropdown({ configured, onSaved }: { configured: boolean; onSaved: () => void }) {
   const [apiKey, setApiKey] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [configured, setConfigured] = useState(false);
-
-  useEffect(() => {
-    api.get('/api/v1/admin/settings/shared-key/deepseek').then((r: any) => {
-      if (r?.configured) setConfigured(true);
-    }).catch(() => {});
-  }, []);
+  const [reconfiguring, setReconfiguring] = useState(false);
 
   const handleSave = async () => {
     if (!apiKey.trim()) return;
@@ -540,6 +533,22 @@ function SettingsDropdown({ onSaved }: { onSaved: () => void }) {
           <span className="text-2xl">✅</span>
           <p className="text-sm font-medium text-emerald-600">配置成功，全局生效</p>
           <p className="text-[10px] text-muted-foreground">窗口即将关闭...</p>
+        </div>
+      ) : configured && !reconfiguring ? (
+        <div className="flex flex-col items-center gap-3 py-2">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
+            <p className="text-sm font-medium text-emerald-600">DeepSeek API Key 已配置</p>
+          </div>
+          <p className="text-[10px] text-muted-foreground -mt-1">全局生效，所有用户可用</p>
+          <Button
+            size="sm"
+            variant="outline"
+            className="w-full h-7 text-xs border-border"
+            onClick={() => setReconfiguring(true)}
+          >
+            重新配置
+          </Button>
         </div>
       ) : (
         <>

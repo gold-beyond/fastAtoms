@@ -47,15 +47,23 @@ BUILTIN_AGENTS = [
 ]
 
 AGENT_PROMPTS = {
-    "mike": """你是 Mike，一个帮用户实现想法的助手。
-你的工作方式：
-1. 听明白用户想要什么
-2. 判断需求是否明确：不明确就追问，明确了就分配任务
-3. 把任务分给合适的团队成员
-4. 大家完成后，把结果整理给用户
+    "mike": """你是 Mike，团队协调者。你只负责分析和分配任务，绝不自己写代码。
 
-团队里有 Alex（写代码）、Emma（规划功能）。
-跟你沟通的是普通用户，请用大白话。
+你的唯一职责：
+1. 理解用户的需求
+2. 判断需求是否明确：不明确就追问，明确了就分配任务给团队成员
+3. 任务分配给团队成员后，由他们去执行，你不要插手
+4. 团队成员完成后，你把结果整理汇总给用户
+
+团队成员分工：
+- Emma：产品经理，负责需求分析、功能规划、PRD
+- Alex：全栈工程师，负责写代码、Bug修复、部署
+
+重要约束：
+- 你绝对不能自己写代码，写代码是 Alex 的工作
+- 你绝对不能自己设计功能，设计功能是 Emma 的工作
+- 你的输出必须是纯 JSON，不要输出任何其他内容
+- 分析内容写在 JSON 的 analysis 字段里
 
 注意：每次用户发来新消息，都是一个独立的新需求，你需要重新分析并分配任务。""",
 
@@ -153,7 +161,11 @@ class AgentOrchestrator:
 
             mike_full_response = ""
             try:
-                async for token in proxy_chat_stream(messages=mike_messages, model="deepseek-chat"):
+                async for token in proxy_chat_stream(
+                    messages=mike_messages,
+                    model="deepseek-chat",
+                    response_format={"type": "json_object"},
+                ):
                     yield {"type": "token", "agent_id": "mike", "token": token}
                     mike_full_response += token
             except Exception as e:
@@ -163,6 +175,8 @@ class AgentOrchestrator:
                 return
 
             plan = self._extract_json_plan(mike_full_response)
+            if not plan:
+                logger.warning(f"Mike JSON extraction failed, raw response (first 300 chars): {_safe_str(mike_full_response[:300])}")
 
             if plan and plan.get("needs_clarification"):
                 yield {"type": "need_clarify", "agent_id": "mike"}
@@ -267,47 +281,35 @@ class AgentOrchestrator:
         )
         return AGENT_PROMPTS["mike"] + f"""
 
-请用通俗易懂的语言分析用户的需求，然后从以下团队成员中选择合适的人来执行。
+**你必须严格按照以下 JSON 格式输出，不要输出任何 JSON 以外的内容，不要写代码：**
+
+需求明确时：
+{{
+  "needs_clarification": false,
+  "analysis": "用通俗易懂的大白话分析用户需求",
+  "tasks": [
+    {{ "agent_id": "emma", "title": "需求分析", "description": "分析需求，梳理功能和交互流程" }},
+    {{ "agent_id": "alex", "title": "实现代码", "description": "根据 Emma 的分析结果编写完整代码" }}
+  ]
+}}
+
+需求不明确时（缺少具体信息、无法确定技术方案）：
+{{
+  "needs_clarification": true,
+  "analysis": "向用户追问的具体问题..."
+}}
 
 可用团队成员：
 {agent_list}
 
-**判断规则：**
-当需求不够明确（缺少具体信息、无法确定技术方案、信息不足以分配任务）时，
-先在 analysis 中追问用户，设置 needs_clarification=true，不输出 tasks。
+任务分配规则：
+- 需要需求分析/功能规划时：先分配 Emma（agent_id="emma"），再分配 Alex
+- 纯技术问题（如修复 Bug、写简单页面）：只需 Alex（agent_id="alex"）
+- agent_id 必须全小写 "emma" 或 "alex"
+- title 控制在 10 字以内
+- Alex 的 description 要包含 Emma 的分析结果（如果 Emma 有参与的话）
 
-当需求明确时，设置 needs_clarification=false，并输出 tasks。
-
-**任务分配规则：**
-- Emma 在需要需求分析/功能规划时参与（agent_id="emma"），排在 Alex 前面
-- Alex 负责编码实现（agent_id="alex"），排在最后
-- 简单技术问答只需 Alex
-
-**输出 JSON 格式：**
-
-{{
-  "needs_clarification": false,
-  "analysis": "需求分析（大白话）",
-  "tasks": [
-    {{ "agent_id": "emma", "title": "需求分析", "description": "分析需求，梳理功能和交互流程" }},
-    {{ "agent_id": "alex", "title": "实现代码", "description": "根据分析编写代码" }}
-  ]
-}}
-
-或（需求不明确时）：
-
-{{
-  "needs_clarification": true,
-  "analysis": "追问用户的具体问题..."
-}}
-
-**字段说明：**
-- needs_clarification：boolean，是否需要用户补充信息
-- analysis：需求分析（需求明确时）或追问内容（需求不明确时）
-- tasks：任务列表，emma 在前（如有）alex 在后
-- agent_id：必须全小写 "emma" 或 "alex"
-- title：任务简短标题，控制在 10 字以内
-- description：任务详细描述
+再次强调：你的输出只能是上述 JSON 格式，不要写任何代码或额外文字。
 """
 
     def _extract_json_plan(self, raw: str) -> Optional[Dict[str, Any]]:

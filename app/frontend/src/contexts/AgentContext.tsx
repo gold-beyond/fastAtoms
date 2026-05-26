@@ -2,6 +2,8 @@ import { createContext, useContext, useState, useEffect, useCallback, ReactNode 
 import { AgentDef, WorkMode, TaskItem, AgentStatus, DEFAULT_AGENTS } from '@/types/agent';
 import { api } from '@/lib/simpleApi';
 
+export const WORK_MODE_STORAGE_KEY = 'fastatoms_work_mode';
+
 interface AgentContextValue {
   agents: AgentDef[];
   activeAgentId: string | null;
@@ -19,7 +21,13 @@ const AgentContext = createContext<AgentContextValue | null>(null);
 export function AgentProvider({ children }: { children: ReactNode }) {
   const [agents, setAgents] = useState<AgentDef[]>(DEFAULT_AGENTS);
   const [activeAgentId, setActiveAgentId] = useState<string | null>('alex');
-  const [workMode, setWorkMode] = useState<WorkMode>('team');
+  const [workMode, setWorkMode] = useState<WorkMode>(() => {
+    try {
+      const saved = localStorage.getItem(WORK_MODE_STORAGE_KEY);
+      if (saved === 'team' || saved === 'engineer') return saved;
+    } catch {}
+    return 'engineer';
+  });
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [agentStatuses, setAgentStatuses] = useState<Record<string, AgentStatus>>({});
 

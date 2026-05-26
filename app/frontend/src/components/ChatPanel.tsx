@@ -273,6 +273,9 @@ export default function ChatPanel({
       abortControllerRef.current = null;
     }
     setIsTyping(false);
+    setAgentStatus('mike', 'completed');
+    setAgentStatus('alex', 'completed');
+    setAgentStatus('emma', 'completed');
   };
 
   useEffect(() => {
@@ -801,14 +804,15 @@ export default function ChatPanel({
                   const summaryMsg = { id: summaryId, role: 'assistant' as const, content: event.content || '', displayContent: display, agentId: 'mike', timestamp: formatTimestamp() };
                   if (isActiveConv) {
                     setMessages((prev) => {
-                      const filtered = prev.filter((m) => !(m.agentId === 'mike' && m.id.endsWith('-plan')));
-                      return [...filtered, summaryMsg];
+                      if (prev.some((m) => m.id === summaryId)) return prev;
+                      return [...prev, summaryMsg];
                     });
                   }
                   if (streamBuffers.current[streamConvId]) {
                     const buf = streamBuffers.current[streamConvId];
-                    buf.messages = buf.messages.filter((m: any) => !(m.agentId === 'mike' && m.id.endsWith('-plan')));
-                    buf.messages.push(summaryMsg);
+                    if (!buf.messages.some((m: any) => m.id === summaryId)) {
+                      buf.messages.push(summaryMsg);
+                    }
                   }
                   onCodeGenerate?.();
                   break;
@@ -835,6 +839,9 @@ export default function ChatPanel({
             },
             onError: (error: string) => {
               setIsTyping(false);
+              setAgentStatus('mike', 'completed');
+              setAgentStatus('alex', 'completed');
+              setAgentStatus('emma', 'completed');
               pendingStreamRef.current = null;
             },
           },
@@ -872,6 +879,9 @@ export default function ChatPanel({
           setMessages(errorMessages);
         }
         setIsTyping(false);
+        setAgentStatus('mike', 'completed');
+        setAgentStatus('alex', 'completed');
+        setAgentStatus('emma', 'completed');
         saveConversation(errorMessages, undefined, requestConvIdRef.current !== currentConvIdRef.current);
       }
       pendingStreamRef.current = null;

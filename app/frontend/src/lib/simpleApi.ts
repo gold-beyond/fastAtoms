@@ -85,12 +85,10 @@ export const api = {
             if (line.startsWith('data: ')) {
               try {
                 const parsed = JSON.parse(line.slice(6));
-                // Generic event callback — caller handles all type dispatch
                 if (onEvent) {
                   onEvent(parsed);
                   continue;
                 }
-                // Legacy callbacks
                 if (parsed.token) {
                   onToken?.(parsed.token);
                 } else if (parsed.done) {
@@ -101,19 +99,23 @@ export const api = {
                   return;
                 }
               } catch {
-                // skip malformed JSON
               }
             }
           }
         }
-        // Stream ended without explicit done
         onDone?.();
       } catch (err: any) {
-        if (err.name === 'AbortError') {
-          onDone?.();
+        if (err.name === 'AbortError' && onDone) {
+          onDone();
         } else {
           (onError || onEvent)?.(err.message || 'Stream read error');
         }
+      }
+    }).catch((err: Error & { name?: string }) => {
+      if (err.name === 'AbortError' && onDone) {
+        onDone();
+      } else {
+        (onError || onEvent)?.(err.message || 'Request was aborted');
       }
     });
   },

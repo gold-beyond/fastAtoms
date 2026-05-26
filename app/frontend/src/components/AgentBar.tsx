@@ -10,7 +10,7 @@ interface AgentBarProps {
 }
 
 export default function AgentBar({ visible, onClose }: AgentBarProps) {
-  const { agents, activeAgentId, setActiveAgentId, agentStatuses } = useAgentContext();
+  const { agents, activeAgentId, setActiveAgentId, agentStatuses, workMode } = useAgentContext();
 
   // Populate the backend's in-memory cache on mount
   useEffect(() => {
@@ -18,6 +18,10 @@ export default function AgentBar({ visible, onClose }: AgentBarProps) {
   }, []);
 
   if (!visible) return null;
+
+  const visibleAgents = workMode === 'engineer'
+    ? agents.filter(a => a.id === 'alex')
+    : agents;
 
   return (
     <div className="absolute top-full right-0 mt-1 w-56 bg-white border border-border rounded-lg shadow-lg z-50 overflow-hidden">
@@ -30,7 +34,7 @@ export default function AgentBar({ visible, onClose }: AgentBarProps) {
       </div>
 
       <div className="py-1 max-h-80 overflow-y-auto">
-        {agents.map((agent) => (
+        {visibleAgents.map((agent) => (
           <AgentCard
             key={agent.id}
             agent={agent}

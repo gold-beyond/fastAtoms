@@ -60,6 +60,7 @@ export default defineConfig(({ command }) => {
         '/api': {
           target: `http://localhost:8000`,
           changeOrigin: true,
+          timeout: 300000,
         },
       },
       watch: { usePolling: true, interval: 600 },

@@ -185,6 +185,7 @@ async def proxy_chat_stream(
     model: str,
     api_key: Optional[str] = None,
     provider: Optional[str] = None,
+    response_format: Optional[Dict[str, str]] = None,
 ) -> AsyncGenerator[str, None]:
     """
     Stream a chat completion request to an external AI provider.
@@ -207,7 +208,7 @@ async def proxy_chat_stream(
         return
 
     if provider in ("openai", "deepseek"):
-        async for token in _call_openai_compatible_stream(messages, model, resolved_api_key, provider):
+        async for token in _call_openai_compatible_stream(messages, model, resolved_api_key, provider, response_format):
             yield token
     elif provider == "anthropic":
         async for token in _call_anthropic_stream(messages, model, resolved_api_key):
@@ -221,6 +222,7 @@ async def _call_openai_compatible_stream(
     model: str,
     api_key: str,
     provider: str,
+    response_format: Optional[Dict[str, str]] = None,
 ) -> AsyncGenerator[str, None]:
     """Call OpenAI-compatible API with streaming (OpenAI or DeepSeek)."""
     from openai import AsyncOpenAI
@@ -234,11 +236,14 @@ async def _call_openai_compatible_stream(
     )
 
     try:
-        stream = await client.chat.completions.create(
-            model=model,
-            messages=messages,  # type: ignore
-            stream=True,
-        )
+        kwargs: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+        }
+        if response_format:
+            kwargs["response_format"] = response_format
+        stream = await client.chat.completions.create(**kwargs)  # type: ignore
         async for chunk in stream:
             if chunk.choices and len(chunk.choices) > 0:
                 delta = chunk.choices[0].delta

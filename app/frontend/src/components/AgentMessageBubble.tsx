@@ -18,6 +18,20 @@ const STATUS_LABELS: Record<string, string> = {
   completed: '已完成',
 };
 
+const STATUS_DOT_CLASS: Record<string, string> = {
+  idle: 'bg-gray-400',
+  thinking: 'bg-yellow-400 animate-pulse',
+  coding: 'bg-green-400 animate-pulse',
+  reviewing: 'bg-blue-400 animate-pulse',
+  completed: 'bg-emerald-500',
+};
+
+const STATUS_TEXT_CLASS: Record<string, string> = {
+  thinking: 'text-yellow-500',
+  coding: 'text-green-500',
+  reviewing: 'text-blue-500',
+};
+
 export default function AgentMessageBubble({ agent, content, status, taskTitle, timestamp }: AgentMessageBubbleProps) {
   return (
     <div className="flex gap-3 justify-start fade-in-up group">
@@ -36,7 +50,7 @@ export default function AgentMessageBubble({ agent, content, status, taskTitle, 
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
           {status && status !== 'idle' && status !== 'completed' && (
-            <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse flex-shrink-0" />
+            <span className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT_CLASS[status] || 'bg-yellow-400 animate-pulse'} flex-shrink-0`} />
           )}
           <span className="text-xs font-medium text-foreground">{agent.name}</span>
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground border border-border">
@@ -53,7 +67,7 @@ export default function AgentMessageBubble({ agent, content, status, taskTitle, 
             </span>
           )}
           {status && status !== 'idle' && status !== 'completed' && (
-            <span className="text-[10px] text-yellow-500 animate-pulse font-medium">
+            <span className={`text-[10px] animate-pulse font-medium ${STATUS_TEXT_CLASS[status] || 'text-yellow-500'}`}>
               {STATUS_LABELS[status] || status}
             </span>
           )}
