@@ -106,7 +106,7 @@ async def chat_with_agent(
         raise HTTPException(status_code=404, detail=_safe_error(str(e)))
     except Exception as e:
         logger.error(f"Agent chat error: {e}")
-        raise HTTPException(status_code=502, detail=f"AI service error: {_safe_error(str(e))}")
+        raise HTTPException(status_code=502, detail="系统异常，请稍后重试。")
 
 
 
@@ -130,11 +130,11 @@ async def team_chat_stream(
             except UnicodeEncodeError as e:
                 err_msg = _safe_error(str(e))
                 logger.error(f"Team stream encoding error: {err_msg}")
-                yield _sse_event({"type": "error", "error": "Mike analysis failed: encoding error"})
+                yield _sse_event({"type": "error", "error": "系统异常，请稍后重试。"})
                 yield _sse_event({"type": "done"})
             except Exception as e:
                 logger.error(f"Team stream error: {e}")
-                yield _sse_event({"type": "error", "error": _safe_error(str(e))})
+                yield _sse_event({"type": "error", "error": "系统异常，请稍后重试。"})
                 yield _sse_event({"type": "done"})
 
         async for chunk in _keepalive_wrapper(_inner()):
@@ -174,11 +174,11 @@ async def chat_with_agent_stream(
             except UnicodeEncodeError as e:
                 err_msg = _safe_error(str(e))
                 logger.error(f"Agent stream encoding error: {err_msg}")
-                yield _sse_event({"error": "Agent request encoding error"})
+                yield _sse_event({"error": "系统异常，请稍后重试。"})
                 yield _sse_event({"done": True, "agent_id": request.agent_id})
             except Exception as e:
                 logger.error(f"Agent stream error: {e}")
-                yield _sse_event({"error": _safe_error(str(e))})
+                yield _sse_event({"error": "系统异常，请稍后重试。"})
                 yield _sse_event({"done": True, "agent_id": request.agent_id})
 
         async for chunk in _keepalive_wrapper(_inner()):

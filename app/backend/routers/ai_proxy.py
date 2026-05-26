@@ -48,7 +48,7 @@ async def chat_proxy(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error("Chat proxy error: %s", e)
-        raise HTTPException(status_code=502, detail=f"AI provider error: {str(e)}")
+        raise HTTPException(status_code=502, detail="系统异常，请稍后重试。")
 
 
 async def _stream_events(data: ChatProxyRequest):
@@ -65,8 +65,7 @@ async def _stream_events(data: ChatProxyRequest):
         yield f"data: {json.dumps({'done': True})}\n\n".encode("utf-8")
     except Exception as e:
         logger.error("Stream error: %s", e)
-        err_msg = str(e).encode("ascii", errors="replace").decode("ascii")
-        yield f"data: {json.dumps({'error': err_msg})}\n\n".encode("utf-8")
+        yield f"data: {json.dumps({'error': '系统异常，请稍后重试。'})}\n\n".encode("utf-8")
 
 
 @router.post("/proxy/stream")

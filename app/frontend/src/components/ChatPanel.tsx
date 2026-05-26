@@ -219,6 +219,14 @@ function formatTimestamp(): string {
   return `${month}-${day} ${hours}:${minutes}`;
 }
 
+interface TeamStreamState {
+  teamMessages: Record<string, string>;
+  completedAgents: Set<string>;
+  doneHandled: boolean;
+  planMsgId: string;
+  teamBaseId: string;
+}
+
 export default function ChatPanel({
   onCodeGenerate,
   onCodeGenerated,
@@ -249,13 +257,13 @@ export default function ChatPanel({
   } | null>(null);
   const requestConvIdRef = useRef<string | null>(null);
   const agentsMapRef = useRef<Record<string, AgentDef>>({});
-  const completedAgents = useRef<Set<string>>(new Set());
+  const streamStateRef = useRef<TeamStreamState | null>(null);
   const streamBuffers = useRef<Record<string, {
     messages: Message[];
     isTyping: boolean;
-    teamMessages: Record<string, string>;
     timestamp: string;
     completedAgents: string[];
+    planMsgId: string;
   }>>({});
 
   useEffect(() => {
@@ -266,13 +274,27 @@ export default function ChatPanel({
     agentsMapRef.current = map;
   }, [agents]);
 
+  const cleanupStream = () => {
+    const ss = streamStateRef.current;
+    if (ss && !ss.doneHandled) {
+      ss.doneHandled = true;
+    }
+    const scId = requestConvIdRef.current;
+    if (scId && streamBuffers.current[scId]) {
+      streamBuffers.current[scId].isTyping = false;
+    }
+    setIsTyping(false);
+    pendingStreamRef.current = null;
+    streamStateRef.current = null;
+  };
+
   const abortGeneration = () => {
     abortRef.current = true;
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
-    setIsTyping(false);
+    cleanupStream();
     setAgentStatus('mike', 'completed');
     setAgentStatus('alex', 'completed');
     setAgentStatus('emma', 'completed');
@@ -289,7 +311,9 @@ export default function ChatPanel({
       const buf = streamBuffers.current[prevId];
       buf.messages = messagesRef.current;
       buf.isTyping = isTyping;
-      buf.completedAgents = Array.from(completedAgents.current);
+      const ss = streamStateRef.current;
+      buf.completedAgents = ss ? Array.from(ss.completedAgents) : [];
+      saveConversation(messagesRef.current, prevId, true);
     }
     if (prevId && messagesRef.current.length > 0 && !streamBuffers.current[prevId]) {
       const msgs = [...messagesRef.current];
@@ -326,7 +350,15 @@ export default function ChatPanel({
     if (buf) {
       setMessages(buf.messages);
       if (buf.isTyping) setIsTyping(true);
-      if (buf.completedAgents) completedAgents.current = new Set(buf.completedAgents);
+      if (buf.completedAgents) {
+        streamStateRef.current = {
+          teamMessages: {},
+          completedAgents: new Set(buf.completedAgents),
+          doneHandled: false,
+          planMsgId: buf.planMsgId || '',
+          teamBaseId: '',
+        };
+      }
       return;
     }
 
@@ -517,26 +549,23 @@ export default function ChatPanel({
   );
 
   const handleStop = () => {
-    if (requestConvIdRef.current !== currentConvIdRef.current) return;
     abortGeneration();
-    setMessages((prev) => {
-      const updated = [...prev];
-      const lastMsg = updated[updated.length - 1];
-      if (lastMsg?.role === 'assistant') {
-        const content = lastMsg.content || '';
-        if (content.startsWith('⏳') || content.startsWith('⚠️')) {
-          updated.pop();
-        } else {
-          updated[updated.length - 1] = {
-            ...lastMsg,
-            content: content || '(已停止生成)',
-            displayContent: '(已停止生成)',
-          };
+    if (requestConvIdRef.current === currentConvIdRef.current) {
+      setMessages((prev) => {
+        const updated = [...prev];
+        const lastMsg = updated[updated.length - 1];
+        if (lastMsg?.role === 'assistant') {
+          const content = lastMsg.content || '';
+          if (content.startsWith('⏳') || content.startsWith('⚠️')) {
+            updated[updated.length - 1] = {
+              ...lastMsg,
+              content: '⏸️ 已停止生成',
+            };
+          }
         }
-      }
-      saveConversation(updated);
-      return updated;
-    });
+        return updated;
+      });
+    }
   };
 
   const handleSend = async () => {
@@ -664,8 +693,15 @@ export default function ChatPanel({
     try {
       if (workMode === 'team') {
         const teamBaseId = Date.now().toString();
-        const teamMessages: Record<string, string> = {};
-        const planMsgId = `${teamBaseId}-plan`;
+        const streamState: TeamStreamState = {
+          teamMessages: {},
+          completedAgents: new Set(),
+          doneHandled: false,
+          planMsgId: `${teamBaseId}-plan`,
+          teamBaseId,
+        };
+        streamStateRef.current = streamState;
+        const { teamMessages, planMsgId } = streamState;
 
         if (abortRef.current) return;
 
@@ -675,22 +711,19 @@ export default function ChatPanel({
         streamBuffers.current[streamConvId] = {
           messages: [...updatedMessages, { id: planMsgId, role: 'assistant', content: '', agentId: 'mike', timestamp: now }],
           isTyping: true,
-          teamMessages: {},
           timestamp: now,
           completedAgents: [],
+          planMsgId,
         };
 
-        let streamDoneHandled = false;
-
         const finishTeamStream = (finalMsgs?: Message[]) => {
-          if (streamDoneHandled) return;
-          streamDoneHandled = true;
+          if (streamState.doneHandled) return;
+          streamState.doneHandled = true;
           const buf = streamBuffers.current[streamConvId];
           const msgs = finalMsgs || (buf ? buf.messages : messagesRef.current);
           if (buf) buf.messages = msgs;
           saveConversation(msgs);
-          setIsTyping(false);
-          pendingStreamRef.current = null;
+          cleanupStream();
         };
 
         await api.postStream(
@@ -737,25 +770,34 @@ export default function ChatPanel({
                   break;
                 }
                 case 'plan': {
+                  const thinkingContent = teamMessages['mike'] || '';
+                  const agentLabels: Record<string, string> = { alex: '👨‍💻 Alex(工程师)', emma: '📋 Emma(产品)' };
+                  const taskFlow = (event.tasks || []).map((t: any, i: number) => {
+                    const who = agentLabels[t.agent_id] || t.agent_id;
+                    return `${i + 1}. ${who} — ${t.title}`;
+                  }).join('\n');
+                  const sep = thinkingContent ? '\n\n---\n\n' : '';
+                  const planContent = `${thinkingContent}${sep}📋 **执行计划**\n\n${taskFlow}`;
                   if (isActiveConv) {
-                    const agentLabels: Record<string, string> = { alex: '👨‍💻 Alex(工程师)', emma: '📋 Emma(产品)' };
-                    const taskFlow = (event.tasks || []).map((t: any, i: number) => {
-                      const who = agentLabels[t.agent_id] || t.agent_id;
-                      return `${i + 1}. ${who} — ${t.title}`;
-                    }).join('\n');
                     setMessages((prev) => {
                       const u = [...prev];
                       const idx = u.findIndex((m) => m.id === planMsgId);
                       if (idx >= 0) {
                         u[idx] = {
                           ...u[idx],
-                          content: `📋 执行计划\n\n${event.analysis || ''}\n\n${taskFlow}`,
+                          content: planContent,
                           timestamp: formatTimestamp(),
                         };
                       }
                       if (streamBuffers.current[streamConvId]) streamBuffers.current[streamConvId].messages = u;
                       return u;
                     });
+                  } else if (streamBuffers.current[streamConvId]) {
+                    const buf = streamBuffers.current[streamConvId];
+                    const idx = buf.messages.findIndex((m: any) => m.id === planMsgId);
+                    if (idx >= 0) {
+                      buf.messages[idx] = { ...buf.messages[idx], content: planContent, timestamp: formatTimestamp() };
+                    }
                   }
                   break;
                 }
@@ -780,17 +822,15 @@ export default function ChatPanel({
                   break;
                 }
                 case 'task_complete': {
-                  completedAgents.current.add(event.agent_id);
+                  streamState.completedAgents.add(event.agent_id);
                   setAgentStatus(event.agent_id, 'completed');
-                  const agentCode = teamMessages[`task${event.task_id}`] || '';
-                  if (agentCode) {
-                    const { files, fullHtml } = parseCodeBlocks(agentCode);
-                    if (event.agent_id === 'alex') {
+                  if (event.agent_id === 'alex') {
+                    const agentCode = teamMessages[`task${event.task_id}`] || '';
+                    if (agentCode) {
+                      const { files, fullHtml } = parseCodeBlocks(agentCode);
                       if (fullHtml) onCodeGenerated?.(files, fullHtml);
                       else if (files.length > 0) onCodeGenerated?.(files, '');
                       else onCodeGenerated?.([], `<html><body><pre>${agentCode}</pre></body></html>`);
-                    } else if (files.length > 0) {
-                      onCodeGenerated?.(files, '');
                     }
                   }
                   break;
@@ -805,13 +845,14 @@ export default function ChatPanel({
                   if (isActiveConv) {
                     setMessages((prev) => {
                       if (prev.some((m) => m.id === summaryId)) return prev;
-                      return [...prev, summaryMsg];
+                      // Remove the plan-phase Mike bubble and add the summary
+                      return [...prev.filter((m) => m.id !== planMsgId), summaryMsg];
                     });
                   }
                   if (streamBuffers.current[streamConvId]) {
                     const buf = streamBuffers.current[streamConvId];
                     if (!buf.messages.some((m: any) => m.id === summaryId)) {
-                      buf.messages.push(summaryMsg);
+                      buf.messages = [...buf.messages.filter((m: any) => m.id !== planMsgId), summaryMsg];
                     }
                   }
                   onCodeGenerate?.();
@@ -821,28 +862,30 @@ export default function ChatPanel({
                   const errMsg = { id: `${teamBaseId}-err`, role: 'assistant' as const, content: `⚠️ ${event.error}`, agentId: 'mike', timestamp: formatTimestamp() };
                   if (isActiveConv) setMessages((prev) => [...prev, errMsg]);
                   if (streamBuffers.current[streamConvId]) streamBuffers.current[streamConvId].messages.push(errMsg);
-                  setIsTyping(false);
-                  pendingStreamRef.current = null;
+                  cleanupStream();
                   break;
                 }
                 case 'done': {
+                  streamState.completedAgents.add('mike');
                   setAgentStatus('mike', 'completed');
                   if (streamBuffers.current[streamConvId]) {
                     streamBuffers.current[streamConvId].isTyping = false;
                   }
                   const buf = streamBuffers.current[streamConvId];
                   const finalMsgs = buf ? buf.messages : messagesRef.current;
+                  if (buf && !isActiveConv) {
+                    setMessages(buf.messages);
+                  }
                   finishTeamStream(finalMsgs);
                   break;
                 }
               }
             },
             onError: (error: string) => {
-              setIsTyping(false);
+              cleanupStream();
               setAgentStatus('mike', 'completed');
               setAgentStatus('alex', 'completed');
               setAgentStatus('emma', 'completed');
-              pendingStreamRef.current = null;
             },
           },
           abortControllerRef.current?.signal,
@@ -869,7 +912,7 @@ export default function ChatPanel({
       }
     } catch (e: unknown) {
       if (!abortRef.current) {
-        const errorDetail = '发生未知错误';
+        const errorDetail = '系统异常，请稍后重试。';
         const errorTimestamp = formatTimestamp();
         const errorMessages: Message[] = [
           ...updatedMessages,
@@ -878,13 +921,12 @@ export default function ChatPanel({
         if (requestConvIdRef.current === currentConvIdRef.current) {
           setMessages(errorMessages);
         }
-        setIsTyping(false);
-        setAgentStatus('mike', 'completed');
-        setAgentStatus('alex', 'completed');
-        setAgentStatus('emma', 'completed');
         saveConversation(errorMessages, undefined, requestConvIdRef.current !== currentConvIdRef.current);
       }
-      pendingStreamRef.current = null;
+      cleanupStream();
+      setAgentStatus('mike', 'completed');
+      setAgentStatus('alex', 'completed');
+      setAgentStatus('emma', 'completed');
     } finally {
       abortControllerRef.current = null;
     }
@@ -965,7 +1007,7 @@ export default function ChatPanel({
               : null;
 
             if (agentInfo && msg.role === 'assistant') {
-              const agentDone = completedAgents.current.has(msg.agentId || '');
+              const agentDone = streamStateRef.current?.completedAgents.has(msg.agentId || '');
               const isStreaming = workMode === 'team'
                 ? isTyping && !agentDone
                 : isTyping && msg.id === pendingStreamRef.current?.assistantId;

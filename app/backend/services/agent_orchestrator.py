@@ -84,7 +84,12 @@ AGENT_PROMPTS = {
 1. 分析用户需求，输出 PRD
 2. 进行竞品分析和市场调研
 3. 定义产品功能和优先级
-4. 设计用户流程和交互方案""",
+4. 设计用户流程和交互方案
+
+重要约束：
+- 请使用 Markdown 格式输出你的分析内容，不要生成任何代码块
+- 你的输出应该是自然语言的产品需求说明，包含：需求理解、目标用户、功能列表、用户流程、建议
+- 不要写任何代码，代码是 Alex 的工作""",
 }
 
 class AgentOrchestrator:
@@ -118,7 +123,7 @@ class AgentOrchestrator:
 
         return await proxy_chat(
             messages=full_messages,
-            model="deepseek-chat",
+            model="deepseek-v4-flash",
         )
 
     async def chat_with_agent_stream(
@@ -140,37 +145,66 @@ class AgentOrchestrator:
 
         async for token in proxy_chat_stream(
             messages=full_messages,
-            model="deepseek-chat",
+            model="deepseek-v4-flash",
         ):
             yield token
 
     async def team_chat_stream(self, messages: List[Dict[str, str]], user_id: str):
         """
-        Single-phase team chat: Mike analyzes, then auto-executes tasks.
+        Two-phase team chat: Mike thinks in natural language (streamed),
+        then distills into JSON plan (non-streamed), then auto-executes tasks.
 
-        Flow: Analyze → (NeedClarify → Done) | (Execute tasks → Summary → Done)
+        Flow: Think → Plan → (NeedClarify → Done) | (Execute tasks → Done)
         """
         try:
-            yield {"type": "phase", "agent_id": "mike", "status": "analyzing"}
-
-            mike_prompt = self._team_mike_prompt()
-            mike_messages = [
-                {"role": "system", "content": mike_prompt},
+            yield {"type": "phase", "agent_id": "mike", "status": "thinking"}
+            all_results = []
+            thinking_prompt = self._team_mike_thinking_prompt()
+            thinking_messages = [
+                {"role": "system", "content": thinking_prompt},
                 *messages,
+            ]
+
+            mike_thinking = ""
+            try:
+                async for token in proxy_chat_stream(
+                    messages=thinking_messages,
+                    model="deepseek-v4-flash",
+                ):
+                    yield {"type": "token", "agent_id": "mike", "token": token}
+                    mike_thinking += token
+            except Exception as e:
+                logger.error(f"Mike thinking stream error: {_safe_str(e)}")
+                yield {"type": "error", "error": "系统异常，请稍后重试。"}
+                yield {"type": "done"}
+                return
+
+            yield {"type": "phase", "agent_id": "mike", "status": "planning"}
+
+            plan_prompt = self._team_mike_prompt()
+            plan_messages = [
+                {"role": "system", "content": plan_prompt},
+                *messages,
+                {"role": "user", "content": f"你刚才的分析如下，请据此生成 JSON 计划：\n\n{mike_thinking}"},
             ]
 
             mike_full_response = ""
             try:
-                async for token in proxy_chat_stream(
-                    messages=mike_messages,
-                    model="deepseek-chat",
+                mike_full_response = await proxy_chat(
+                    messages=plan_messages,
+                    model="deepseek-v4-flash",
                     response_format={"type": "json_object"},
-                ):
-                    yield {"type": "token", "agent_id": "mike", "token": token}
-                    mike_full_response += token
+                )
+                if not mike_full_response or not mike_full_response.strip():
+                    logger.warning("Mike plan generation returned empty, retrying once")
+                    mike_full_response = await proxy_chat(
+                        messages=plan_messages,
+                        model="deepseek-v4-flash",
+                        response_format={"type": "json_object"},
+                    )
             except Exception as e:
-                logger.error(f"Mike analysis stream error: {_safe_str(e)}")
-                yield {"type": "error", "error": "生成失败，请稍后重试！"}
+                logger.error(f"Mike plan generation error: {_safe_str(e)}")
+                yield {"type": "error", "error": "系统异常，请稍后重试。"}
                 yield {"type": "done"}
                 return
 
@@ -202,13 +236,46 @@ class AgentOrchestrator:
                     "description": last_user_msg,
                 }]
 
+            seen_agents: set = set()
+            deduped_tasks = []
+            default_titles = {"emma": "需求分析", "alex": "实现代码"}
+            for t in tasks:
+                agent_id = t.get("agent_id", "alex").lower()
+                if agent_id not in ["emma", "alex"]:
+                    logger.warning(f"Unknown agent_id '{agent_id}' in plan, skipping task")
+                    continue
+                title = t.get("title", "") or ""
+                # 如果标题为空，使用默认标题
+                if not title.strip():
+                    title = default_titles.get(agent_id, "执行任务")
+                    t["title"] = title
+                if agent_id in seen_agents:
+                    continue
+                seen_agents.add(agent_id)
+                deduped_tasks.append(t)
+
+            # 强制确保有 Emma 和 Alex，顺序固定 Emma → Alex
+            required_agents = ["emma", "alex"]
+            final_tasks = []
+            for agent_id in required_agents:
+                existing_task = next((t for t in deduped_tasks if t.get("agent_id", "").lower() == agent_id), None)
+                if existing_task:
+                    final_tasks.append(existing_task)
+                else:
+                    # 如果缺失，添加默认任务
+                    final_tasks.append({
+                        "agent_id": agent_id,
+                        "title": default_titles[agent_id],
+                        "description": last_user_msg
+                    })
+            tasks = final_tasks
+
             yield {"type": "plan", "analysis": plan.get("analysis", ""), "tasks": [
                 {"agent_id": t.get("agent_id", "alex").lower(), "title": t.get("title", "未知任务"), "task_id": i + 1}
                 for i, t in enumerate(tasks)
             ]}
 
             global_task_id = 0
-            all_results = []
 
             for task in tasks:
                 global_task_id += 1
@@ -247,12 +314,12 @@ class AgentOrchestrator:
 
                 agent_content = ""
                 try:
-                    async for token in proxy_chat_stream(messages=full_messages, model="deepseek-chat"):
+                    async for token in proxy_chat_stream(messages=full_messages, model="deepseek-v4-flash"):
                         yield {"type": "token", "agent_id": agent_id, "token": token, "task_id": global_task_id}
                         agent_content += token
                 except Exception as e:
                     logger.error(f"Agent {agent_id} stream error: {_safe_str(e)}")
-                    yield {"type": "error", "error": f"{agent_id} task failed: {_safe_str(e)}"}
+                    yield {"type": "error", "error": "系统异常，请稍后重试。"}
 
                 all_results.append({
                     "agent_id": agent_id,
@@ -263,15 +330,29 @@ class AgentOrchestrator:
                 yield {"type": "task_complete", "agent_id": agent_id,
                        "task_id": global_task_id, "title": task_title}
 
-            yield {"type": "phase", "agent_id": "mike", "status": "summarizing"}
-            task_items = "\n".join(f"- **{r['agent_id']}**: {r['title']}" for r in all_results)
-            summary = f"## 执行完成\n\n已完成以下任务：\n{task_items}"
-            yield {"type": "summary", "agent_id": "mike", "content": summary, "tasks": all_results}
             yield {"type": "done"}
         except Exception as e:
-            logger.error(f"Team chat stream unexpected error: {_safe_str(e)}", exc_info=True)
-            yield {"type": "error", "error": "团队协作遇到意外错误，请重试"}
+            completed_agents = [r["agent_id"] for r in all_results]
+            logger.error(
+                f"Team chat stream unexpected error: {_safe_str(e)} | "
+                f"completed_tasks={len(all_results)} agents={completed_agents}",
+                exc_info=True,
+            )
+            yield {"type": "error", "error": "系统异常，请稍后重试。"}
             yield {"type": "done"}
+
+    def _team_mike_thinking_prompt(self) -> str:
+        """Build the thinking prompt for Mike - natural language analysis."""
+        return """你是 Mike，团队协调者。现在用户向你提出了一个需求，请你先仔细思考分析：
+
+1. 用户到底想要什么？用简单的话复述一下
+2. 这个需求有哪些关键点需要注意？
+3. Emma 需要分析哪些方面？Alex 需要实现什么？
+
+记住：每个需求都需要 Emma 先做需求分析，Alex 再根据 Emma 的分析实现代码。
+
+请用简短的自然语言输出你的思考过程，就像你在自言自语梳理问题。
+不要写代码，不要用 JSON 格式，不要长篇大论。"""
 
     def _team_mike_prompt(self) -> str:
         """Build the team-mode prompt for Mike with JSON output instruction."""
@@ -303,11 +384,12 @@ class AgentOrchestrator:
 {agent_list}
 
 任务分配规则：
-- 需要需求分析/功能规划时：先分配 Emma（agent_id="emma"），再分配 Alex
-- 纯技术问题（如修复 Bug、写简单页面）：只需 Alex（agent_id="alex"）
+- 每个需求都必须先分配 Emma（agent_id="emma"）做需求分析，再分配 Alex（agent_id="alex"）实现代码
+- 顺序固定：Emma 在前，Alex 在后，必须两个都有
 - agent_id 必须全小写 "emma" 或 "alex"
-- title 控制在 10 字以内
-- Alex 的 description 要包含 Emma 的分析结果（如果 Emma 有参与的话）
+- 每个 agent 最多出现一次，不要重复分配同一个 agent 的多个任务
+- title 必须填写，控制在 10 字以内，不能为空
+- Alex 的 description 要包含 Emma 的分析结果
 
 再次强调：你的输出只能是上述 JSON 格式，不要写任何代码或额外文字。
 """
@@ -324,9 +406,7 @@ class AgentOrchestrator:
             for task in tasks:
                 if not isinstance(task, dict):
                     continue
-                # Accept common title variants
                 title = task.get("title") or task.get("name") or task.get("task") or task.get("task_name") or ""
-                # Accept common agent_id variants (lowercase to match BUILTIN_AGENTS)
                 _agent_id_raw = (
                     task.get("agent_id")
                     or task.get("agentId")
@@ -336,7 +416,9 @@ class AgentOrchestrator:
                     or "alex"
                 )
                 agent_id = str(_agent_id_raw).lower() if _agent_id_raw else "alex"
-                # Accept common description variants
+                if not title.strip():
+                    default_titles = {"emma": "需求分析", "alex": "实现代码"}
+                    title = default_titles.get(agent_id, "执行任务")
                 description = (
                     task.get("description")
                     or task.get("desc")

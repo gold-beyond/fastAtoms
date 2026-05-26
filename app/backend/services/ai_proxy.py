@@ -5,8 +5,7 @@ from typing import AsyncGenerator, List, Dict, Any, Optional
 
 import httpx
 from core.config import settings
-from services.aihub import AIHubService
-from schemas.aihub import GenTxtRequest, ChatMessage
+
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +14,7 @@ def _create_http_client() -> httpx.AsyncClient:
     """Create an httpx client with explicit UTF-8 encoding to prevent
     UnicodeEncodeError on systems where the default encoding is ASCII."""
     return httpx.AsyncClient(
-        timeout=httpx.Timeout(60.0, connect=10.0),
+        timeout=httpx.Timeout(180.0, connect=15.0),
         default_encoding="utf-8",
     )
 
@@ -72,16 +71,18 @@ async def proxy_chat(
     model: str,
     api_key: Optional[str] = None,
     provider: Optional[str] = None,
+    response_format: Optional[Dict[str, str]] = None,
 ) -> str:
     """
     Proxy a chat completion request to an external AI provider.
-    Falls back to AIHubService (Atoms Cloud built-in AI) when no API key is available.
+    Requires a valid API key. Raises ValueError if no key is available.
 
     Args:
         messages: List of message dicts with 'role' and 'content' keys.
         model: The model identifier (e.g., 'gpt-4o', 'claude-sonnet-4-20250514').
         api_key: The user's API key for the provider (optional, falls back to env).
         provider: One of 'openai', 'anthropic', 'deepseek' (optional, inferred from model).
+        response_format: Optional format constraint (e.g., {"type": "json_object"}).
 
     Returns:
         The assistant's response content as a string.
@@ -89,19 +90,11 @@ async def proxy_chat(
     provider = _resolve_provider(provider, model)
     resolved_api_key = _resolve_api_key(api_key, provider)
 
-    # Fallback to AIHubService when no external API key is available
     if not resolved_api_key:
-        logger.info("No external API key found, falling back to AIHubService")
-        service = AIHubService()
-        request = GenTxtRequest(
-            messages=[ChatMessage(role=m["role"], content=m["content"]) for m in messages],
-            model="deepseek-v3.2",
-        )
-        response = await service.gentxt(request)
-        return response.content
+        raise ValueError("DeepSeek API Key 未配置，请在设置中配置或设置环境变量 DEEPSEEK_API_KEY")
 
     if provider in ("openai", "deepseek"):
-        return await _call_openai_compatible(messages, model, resolved_api_key, provider)
+        return await _call_openai_compatible(messages, model, resolved_api_key, provider, response_format)
     elif provider == "anthropic":
         return await _call_anthropic(messages, model, resolved_api_key)
     else:
@@ -113,6 +106,7 @@ async def _call_openai_compatible(
     model: str,
     api_key: str,
     provider: str,
+    response_format: Optional[Dict[str, str]] = None,
 ) -> str:
     """Call OpenAI-compatible API (OpenAI or DeepSeek)."""
     from openai import AsyncOpenAI
@@ -126,10 +120,13 @@ async def _call_openai_compatible(
     )
 
     try:
-        response = await client.chat.completions.create(
-            model=model,
-            messages=messages,  # type: ignore
-        )
+        kwargs: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+        }
+        if response_format:
+            kwargs["response_format"] = response_format
+        response = await client.chat.completions.create(**kwargs)  # type: ignore
         return response.choices[0].message.content or ""
     except Exception as e:
         logger.error(f"OpenAI-compatible API error ({provider}): {e}")
@@ -189,23 +186,14 @@ async def proxy_chat_stream(
 ) -> AsyncGenerator[str, None]:
     """
     Stream a chat completion request to an external AI provider.
-    Falls back to AIHubService (Atoms Cloud built-in AI) when no API key is available.
+    Requires a valid API key. Raises ValueError if no key is available.
     Yields tokens as they are received.
     """
     provider = _resolve_provider(provider, model)
     resolved_api_key = _resolve_api_key(api_key, provider)
 
-    # Fallback to AIHubService when no external API key is available
     if not resolved_api_key:
-        logger.info("No external API key found for streaming, falling back to AIHubService")
-        service = AIHubService()
-        request = GenTxtRequest(
-            messages=[ChatMessage(role=m["role"], content=m["content"]) for m in messages],
-            model="deepseek-v3.2",
-        )
-        async for chunk in service.gentxt_stream(request):
-            yield chunk
-        return
+        raise ValueError("DeepSeek API Key 未配置，请在设置中配置或设置环境变量 DEEPSEEK_API_KEY")
 
     if provider in ("openai", "deepseek"):
         async for token in _call_openai_compatible_stream(messages, model, resolved_api_key, provider, response_format):
