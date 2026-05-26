@@ -158,10 +158,23 @@ async def get_settings(current_user: UserResponse = Depends(get_admin_user)):
 
         frontend_descriptions = {"VITE_API_BASE_URL": "Base API URL", "VITE_FRONTEND_URL": "Frontend URL"}
 
+        # Sensitive keys that should be masked
+        _SENSITIVE_KEYS = {
+            "JWT_SECRET_KEY", "STRIPE_SECRET_KEY", "OIDC_CLIENT_SECRET",
+            "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+            "DATABASE_URL", "OSS_API_KEY", "APP_AI_KEY",
+        }
+
+        def _mask_value(v: str) -> str:
+            if len(v) <= 8:
+                return v[:2] + "***"
+            return v[:4] + "***" + v[-4:]
+
         # Build response data
         backend_config = {}
         for key, value in backend_vars.items():
-            backend_config[key] = EnvVariable(key=key, value=value, description=backend_descriptions.get(key, ""))
+            display_value = _mask_value(value) if key in _SENSITIVE_KEYS and value else value
+            backend_config[key] = EnvVariable(key=key, value=display_value, description=backend_descriptions.get(key, ""))
 
         frontend_config = {}
         for key, value in frontend_vars.items():

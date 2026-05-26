@@ -67,7 +67,7 @@ class DatabaseManager:
 
         # Already async drivers
         if "+aiosqlite" in drivername or "+asyncpg" in drivername or "+aiomysql" in drivername:
-            normalized = url.render_as_string(hide_password=False)
+            normalized = url.render_as_string(hide_password=True)
             self._check_db_exist(normalized)
             return normalized
 
@@ -86,7 +86,7 @@ class DatabaseManager:
             logger.warning(f"Unknown database driver: {drivername}")
             return raw_url
 
-        normalized = url.render_as_string(hide_password=False)
+        normalized = url.render_as_string(hide_password=True)
         if normalized != raw_url:
             logger.warning("Adjusted database URL driver for async compatibility")
         return normalized

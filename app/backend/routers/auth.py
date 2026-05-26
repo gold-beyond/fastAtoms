@@ -324,7 +324,7 @@ async def login_simple(
     request: SimpleLoginRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    from core.password import DEFAULT_ACCOUNT_HASHES, verify_password
+    from core.password import verify_password
 
     name = request.name.strip()
     password = request.password.strip()
@@ -340,24 +340,13 @@ async def login_simple(
     result = await db.execute(sa_select(UserModel).where(UserModel.id == f"simple:{name}"))
     user = result.scalar_one_or_none()
 
-    if user and user.password_hash:
-        # DB-stored hash — verify against it
-        if not verify_password(password, user.password_hash):
-            raise HTTPException(status_code=401, detail="用户名或密码错误")
-        # Update last_login
-        user.last_login = datetime.now(timezone.utc)
-        await db.commit()
-        await db.refresh(user)
-    else:
-        # Fallback: check hardcoded hashes (legacy accounts)
-        expected_hash = DEFAULT_ACCOUNT_HASHES.get(name)
-        if not expected_hash or not verify_password(password, expected_hash):
-            raise HTTPException(status_code=401, detail="用户名或密码错误")
-        user = await auth_service.get_or_create_user(
-            platform_sub=f"simple:{name}",
-            email=f"{name}@atoms.local",
-            name=name,
-        )
+    if not user or not user.password_hash:
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    if not verify_password(password, user.password_hash):
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    user.last_login = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(user)
 
     token, expires_at, _ = await auth_service.issue_app_token(user)
     return SimpleLoginResponse(

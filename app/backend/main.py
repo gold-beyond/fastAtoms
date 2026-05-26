@@ -159,13 +159,13 @@ origins = [
     "http://127.0.0.1:5173",
 ]
 if settings.is_lambda:
-    lambda_origin = os.environ.get("CORS_ORIGIN", "*")
-    if lambda_origin != "*":
+    lambda_origin = os.environ.get("CORS_ORIGIN", "")
+    if lambda_origin and lambda_origin != "*":
         origins = [lambda_origin]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins if origins != ["*"] else ["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -251,9 +251,11 @@ async def general_exception_handler(request: Request, exc: Exception):
     is_dev = os.getenv("ENVIRONMENT", "prod").lower() == "dev"
 
     if is_dev:
-        # Dev environment: return full stack trace and exception details
-        error_detail = f"{error_type}: {error_message}\n{traceback.format_exc()}"
-        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": error_detail})
+        # Dev environment: return error type and message (no stack trace)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": f"{error_type}: {error_message}"},
+        )
     else:
         # Prod environment: return only generic error message
         return JSONResponse(
