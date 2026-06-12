@@ -11,14 +11,14 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install backend dependencies
-COPY app/backend/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+COPY app/backend/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Copy backend code
-COPY app/backend/ ./
+COPY app/backend /app/
 
 # Copy built frontend from stage 1
-COPY --from=frontend-build /app/frontend/dist ./frontend/dist
+COPY --from=frontend-build /app/frontend/dist /app/frontend/dist
 
 # Tell main.py where the frontend is
 ENV FRONTEND_DIST=/app/frontend/dist
