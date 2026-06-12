@@ -13,6 +13,7 @@ interface AgentContextValue {
   tasks: TaskItem[];
   agentStatuses: Record<string, AgentStatus>;
   setAgentStatus: (agentId: string, status: AgentStatus) => void;
+  resetAgentStatuses: () => void;
   refreshAgents: () => Promise<void>;
 }
 
@@ -51,6 +52,10 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     setAgentStatuses(prev => ({ ...prev, [agentId]: status }));
   }, []);
 
+  const resetAgentStatuses = useCallback(() => {
+    setAgentStatuses({});
+  }, []);
+
   return (
     <AgentContext.Provider
       value={{
@@ -62,6 +67,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
         tasks,
         agentStatuses,
         setAgentStatus,
+        resetAgentStatuses,
         refreshAgents,
       }}
     >

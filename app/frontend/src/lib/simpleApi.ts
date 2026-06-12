@@ -7,6 +7,19 @@ function authHeaders(): Record<string, string> {
     : { 'Content-Type': 'application/json' };
 }
 
+/** 统一错误分发：onError 优先，否则用 {type:'error'} 格式传给 onEvent */
+function dispatchError(
+  onError: ((e: string) => void) | undefined,
+  onEvent: ((e: Record<string, any>) => void) | undefined,
+  message: string,
+) {
+  if (onError) {
+    onError(message);
+  } else if (onEvent) {
+    onEvent({ type: 'error', error: message });
+  }
+}
+
 async function handleResponse(res: Response) {
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -56,20 +69,35 @@ export const api = {
     signal?: AbortSignal,
   ): Promise<void> => {
     const { onToken, onDone, onError, onEvent } = callbacks;
+
+    // Apply a 5-minute timeout to prevent hanging connections
+    const STREAM_TIMEOUT_MS = 300000;
+    const timeoutController = new AbortController();
+    const timeoutId = setTimeout(() => timeoutController.abort(), STREAM_TIMEOUT_MS);
+
+    // Combine external signal with timeout
+    const combinedSignal = timeoutController.signal;
+    if (signal) {
+      signal.addEventListener('abort', () => timeoutController.abort());
+    }
+
+    const cleanup = () => clearTimeout(timeoutId);
+
     return fetch(url, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify(data),
-      signal,
+      signal: combinedSignal,
     }).then(async (res) => {
+      cleanup();
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        (onError || onEvent)?.(body.detail || `API Error: ${res.status}`);
+        dispatchError(onError, onEvent, body.detail || `API Error: ${res.status}`);
         return;
       }
       const reader = res.body?.getReader();
       if (!reader) {
-        (onError || onEvent)?.('Response body is not readable');
+        dispatchError(onError, onEvent, 'Response body is not readable');
         return;
       }
       const decoder = new TextDecoder();
@@ -108,14 +136,15 @@ export const api = {
         if (err.name === 'AbortError' && onDone) {
           onDone();
         } else {
-          (onError || onEvent)?.(err.message || 'Stream read error');
+          dispatchError(onError, onEvent, err.message || 'Stream read error');
         }
       }
     }).catch((err: Error & { name?: string }) => {
+      cleanup();
       if (err.name === 'AbortError' && onDone) {
         onDone();
       } else {
-        (onError || onEvent)?.(err.message || 'Request was aborted');
+        dispatchError(onError, onEvent, err.message || 'Request was aborted');
       }
     });
   },

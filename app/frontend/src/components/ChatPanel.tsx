@@ -32,7 +32,6 @@ interface GeneratedFile {
 }
 
 interface ChatPanelProps {
-  onCodeGenerate?: () => void;
   onCodeGenerated?: (files: GeneratedFile[], html: string) => void;
   onCodeRestored?: (files: GeneratedFile[], html: string) => void;
   onConversationSaved?: (id: string) => void;
@@ -228,7 +227,6 @@ interface TeamStreamState {
 }
 
 export default function ChatPanel({
-  onCodeGenerate,
   onCodeGenerated,
   onCodeRestored,
   onConversationSaved,
@@ -248,7 +246,7 @@ export default function ChatPanel({
   const prevConvIdRef = useRef<string | null>(null);
   const currentConvIdRef = useRef(currentConvId);
   currentConvIdRef.current = currentConvId;
-  const { workMode, setWorkMode, activeAgentId, agents, setAgentStatus } = useAgentContext();
+  const { workMode, setWorkMode, activeAgentId, agents, setAgentStatus, resetAgentStatuses } = useAgentContext();
   const pendingStreamRef = useRef<{
     convId: string;
     assistantId: string;
@@ -470,7 +468,7 @@ export default function ChatPanel({
   }, [currentConvId, isLoggedIn]);
 
   const saveConversation = useCallback(
-    async (msgs: Message[], convIdOverride?: string, silent?: boolean) => {
+    async (msgs: Message[], convIdOverride?: string, silent?: boolean): Promise<string | null> => {
       const targetConvId = convIdOverride ?? currentConvIdRef.current;
       const saveMsgs = msgs.map((m) => ({
         id: m.id,
@@ -495,6 +493,7 @@ export default function ChatPanel({
           if (targetConvId) {
             await api.put(`/api/v1/entities/conversations/${targetConvId}`, saveBody);
             if (!silent) onConversationSaved?.(targetConvId);
+            return targetConvId;
           } else {
             const data = await api.post<any>('/api/v1/entities/conversations', saveBody);
             if (data?.id) {
@@ -502,6 +501,7 @@ export default function ChatPanel({
               prevConvIdRef.current = newId;
               onCurrentConvIdChange?.(newId);
               if (!silent) onConversationSaved?.(newId);
+              return newId;
             }
           }
         } catch { /* silently handle save errors */ }
@@ -515,6 +515,7 @@ export default function ChatPanel({
           }
           saveLocalConversations(localConvs);
           if (!silent) onConversationSaved?.(targetConvId);
+          return targetConvId;
         } else {
           const newId = `local-${Date.now()}`;
           localConvs.unshift({
@@ -527,8 +528,10 @@ export default function ChatPanel({
           prevConvIdRef.current = newId;
           onCurrentConvIdChange?.(newId);
           if (!silent) onConversationSaved?.(newId);
+          return newId;
         }
       }
+      return null;
     },
     [isLoggedIn, currentConvId, onConversationSaved, onCurrentConvIdChange]
   );
@@ -590,17 +593,16 @@ export default function ChatPanel({
 
     const assistantId = (Date.now() + 1).toString();
 
-    requestConvIdRef.current = currentConvId;
+    // 立即创建/更新对话，确保左侧列表即时出现新条目
+    const savedConvId = await saveConversation(updatedMessages);
+    const effectiveConvId = savedConvId ?? currentConvId;
+    requestConvIdRef.current = effectiveConvId;
     pendingStreamRef.current = {
-      convId: currentConvId!,
+      convId: effectiveConvId!,
       assistantId,
       accumulatedContent: '',
       baseMessages: updatedMessages,
     };
-
-    if (currentConvId) {
-      saveConversation(updatedMessages);
-    }
 
     const apiMessages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
       { role: 'system', content: SYSTEM_PROMPT },
@@ -650,7 +652,6 @@ export default function ChatPanel({
           { id: assistantId, role: 'assistant', content, displayContent: display, agentId, timestamp: replyTimestamp },
         ];
         setMessages(finalMessages);
-        onCodeGenerate?.();
         setIsTyping(false);
         saveConversation(finalMessages);
       } else {
@@ -692,6 +693,8 @@ export default function ChatPanel({
 
     try {
       if (workMode === 'team') {
+        // Reset agent statuses from any previous conversation
+        resetAgentStatuses();
         const teamBaseId = Date.now().toString();
         const streamState: TeamStreamState = {
           teamMessages: {},
@@ -707,7 +710,7 @@ export default function ChatPanel({
 
         setMessages((prev) => [...prev, { id: planMsgId, role: 'assistant', content: '', agentId: 'mike', timestamp: now }]);
 
-        const streamConvId = currentConvIdRef.current || `_team_${teamBaseId}`;
+        const streamConvId = effectiveConvId || `_team_${teamBaseId}`;
         streamBuffers.current[streamConvId] = {
           messages: [...updatedMessages, { id: planMsgId, role: 'assistant', content: '', agentId: 'mike', timestamp: now }],
           isTyping: true,
@@ -743,24 +746,36 @@ export default function ChatPanel({
                   const tId: number | undefined = event.task_id;
                   const key = tId ? `task${tId}` : agId;
                   teamMessages[key] = (teamMessages[key] || '') + (event.token || '');
+                  // Use teamBaseId-scoped message ID so tokens only update the current round's bubble
+                  const taskMsgId = tId ? `${teamBaseId}-task${tId}` : '';
 
                   if (isActiveConv) {
                     setMessages((prev) => {
                       const u = [...prev];
-                      if (tId) {
-                        const idx = u.findIndex((m) => m.taskId === tId && m.role === 'assistant');
+                      if (tId && taskMsgId) {
+                        const idx = u.findIndex((m) => m.id === taskMsgId);
                         if (idx >= 0) u[idx] = { ...u[idx], content: teamMessages[key] };
                       } else {
                         const idx = u.findIndex((m) => m.id === planMsgId);
                         if (idx >= 0) u[idx] = { ...u[idx], content: teamMessages[key] };
                       }
-                      if (streamBuffers.current[streamConvId]) streamBuffers.current[streamConvId].messages = u;
                       return u;
                     });
+                    // Update buffer after React state is settled (avoid side-effects in updater)
+                    if (streamBuffers.current[streamConvId]) {
+                      const buf = streamBuffers.current[streamConvId];
+                      if (tId && taskMsgId) {
+                        const idx = buf.messages.findIndex((m: any) => m.id === taskMsgId);
+                        if (idx >= 0) buf.messages[idx] = { ...buf.messages[idx], content: teamMessages[key] };
+                      } else {
+                        const idx = buf.messages.findIndex((m: any) => m.id === planMsgId);
+                        if (idx >= 0) buf.messages[idx] = { ...buf.messages[idx], content: teamMessages[key] };
+                      }
+                    }
                   } else if (streamBuffers.current[streamConvId]) {
                     const buf = streamBuffers.current[streamConvId];
-                    if (tId) {
-                      const idx = buf.messages.findIndex((m: any) => m.taskId === tId && m.role === 'assistant');
+                    if (tId && taskMsgId) {
+                      const idx = buf.messages.findIndex((m: any) => m.id === taskMsgId);
                       if (idx >= 0) buf.messages[idx] = { ...buf.messages[idx], content: teamMessages[key] };
                     } else {
                       const idx = buf.messages.findIndex((m: any) => m.id === planMsgId);
@@ -789,9 +804,16 @@ export default function ChatPanel({
                           timestamp: formatTimestamp(),
                         };
                       }
-                      if (streamBuffers.current[streamConvId]) streamBuffers.current[streamConvId].messages = u;
                       return u;
                     });
+                    // Update buffer after React state is settled
+                    if (streamBuffers.current[streamConvId]) {
+                      const buf = streamBuffers.current[streamConvId];
+                      const idx = buf.messages.findIndex((m: any) => m.id === planMsgId);
+                      if (idx >= 0) {
+                        buf.messages[idx] = { ...buf.messages[idx], content: planContent, timestamp: formatTimestamp() };
+                      }
+                    }
                   } else if (streamBuffers.current[streamConvId]) {
                     const buf = streamBuffers.current[streamConvId];
                     const idx = buf.messages.findIndex((m: any) => m.id === planMsgId);
@@ -811,10 +833,13 @@ export default function ChatPanel({
                   if (isActiveConv) {
                     setMessages((prev) => {
                       if (prev.some((m) => m.id === msgId)) return prev;
-                      const u = [...prev, newMsg];
-                      if (streamBuffers.current[streamConvId]) streamBuffers.current[streamConvId].messages = u;
-                      return u;
+                      return [...prev, newMsg];
                     });
+                    // Update buffer after React state is settled
+                    if (streamBuffers.current[streamConvId]) {
+                      const buf = streamBuffers.current[streamConvId];
+                      if (!buf.messages.some((m: any) => m.id === msgId)) buf.messages.push(newMsg);
+                    }
                   } else if (streamBuffers.current[streamConvId]) {
                     const buf = streamBuffers.current[streamConvId];
                     if (!buf.messages.some((m: any) => m.id === msgId)) buf.messages.push(newMsg);
@@ -835,43 +860,61 @@ export default function ChatPanel({
                   }
                   break;
                 }
-                case 'need_clarify':
-                  finishTeamStream();
-                  break;
-                case 'summary': {
-                  const summaryId = `${teamBaseId}-summary`;
-                  const display = processAIResponse(event.content || '');
-                  const summaryMsg = { id: summaryId, role: 'assistant' as const, content: event.content || '', displayContent: display, agentId: 'mike', timestamp: formatTimestamp() };
+                case 'need_clarify': {
+                  // Add a visible feedback message before finishing the stream
+                  const clarifyMsg = {
+                    id: `${teamBaseId}-clarify`,
+                    role: 'assistant' as const,
+                    content: '⚠️ 需要更多信息才能继续，请补充你的需求描述。',
+                    agentId: 'mike',
+                    timestamp: formatTimestamp(),
+                  };
                   if (isActiveConv) {
-                    setMessages((prev) => {
-                      if (prev.some((m) => m.id === summaryId)) return prev;
-                      // Remove the plan-phase Mike bubble and add the summary
-                      return [...prev.filter((m) => m.id !== planMsgId), summaryMsg];
-                    });
+                    setMessages((prev) => [...prev, clarifyMsg]);
                   }
-                  if (streamBuffers.current[streamConvId]) {
-                    const buf = streamBuffers.current[streamConvId];
-                    if (!buf.messages.some((m: any) => m.id === summaryId)) {
-                      buf.messages = [...buf.messages.filter((m: any) => m.id !== planMsgId), summaryMsg];
-                    }
+                  const buf = streamBuffers.current[streamConvId];
+                  if (buf) {
+                    buf.messages = [...buf.messages, clarifyMsg];
+                    saveConversation(buf.messages);
                   }
-                  onCodeGenerate?.();
+                  finishTeamStream();
                   break;
                 }
                 case 'error': {
                   const errMsg = { id: `${teamBaseId}-err`, role: 'assistant' as const, content: `⚠️ ${event.error}`, agentId: 'mike', timestamp: formatTimestamp() };
                   if (isActiveConv) setMessages((prev) => [...prev, errMsg]);
-                  if (streamBuffers.current[streamConvId]) streamBuffers.current[streamConvId].messages.push(errMsg);
+                  const buf = streamBuffers.current[streamConvId];
+                  if (buf) {
+                    buf.messages = [...buf.messages, errMsg];
+                    // Persist error message immediately so it survives page refresh
+                    saveConversation(buf.messages);
+                  }
                   cleanupStream();
                   break;
                 }
                 case 'done': {
                   streamState.completedAgents.add('mike');
                   setAgentStatus('mike', 'completed');
-                  if (streamBuffers.current[streamConvId]) {
-                    streamBuffers.current[streamConvId].isTyping = false;
+
+                  // Remove the plan bubble and add a completion message
+                  const completionMsg = {
+                    id: `${teamBaseId}-complete`,
+                    role: 'assistant' as const,
+                    content: '✅ 团队协作完成！所有任务已执行完毕。',
+                    agentId: 'mike',
+                    timestamp: formatTimestamp(),
+                  };
+
+                  if (isActiveConv) {
+                    setMessages((prev) => [...prev.filter((m) => m.id !== planMsgId), completionMsg]);
                   }
+
                   const buf = streamBuffers.current[streamConvId];
+                  if (buf) {
+                    buf.messages = [...buf.messages.filter((m: any) => m.id !== planMsgId), completionMsg];
+                    buf.isTyping = false;
+                  }
+
                   const finalMsgs = buf ? buf.messages : messagesRef.current;
                   if (buf && !isActiveConv) {
                     setMessages(buf.messages);
@@ -880,6 +923,15 @@ export default function ChatPanel({
                   break;
                 }
               }
+            },
+            onDone: () => {
+              // Stream ended without a proper 'done' event — treat as completion
+              if (streamState.doneHandled) return;
+              streamState.completedAgents.add('mike');
+              setAgentStatus('mike', 'completed');
+              const buf = streamBuffers.current[streamConvId];
+              const finalMsgs = buf ? buf.messages : messagesRef.current;
+              finishTeamStream(finalMsgs);
             },
             onError: (error: string) => {
               cleanupStream();
@@ -1007,9 +1059,15 @@ export default function ChatPanel({
               : null;
 
             if (agentInfo && msg.role === 'assistant') {
+              // Only show streaming status for messages belonging to the current round (same teamBaseId).
+              // Previous rounds' messages should always appear as completed.
+              const currentTeamBaseId = streamStateRef.current?.teamBaseId;
+              const isFromCurrentRound = currentTeamBaseId
+                ? msg.id.includes(currentTeamBaseId)
+                : false;
               const agentDone = streamStateRef.current?.completedAgents.has(msg.agentId || '');
               const isStreaming = workMode === 'team'
-                ? isTyping && !agentDone
+                ? isTyping && isFromCurrentRound && !agentDone
                 : isTyping && msg.id === pendingStreamRef.current?.assistantId;
               // Agent-specific status labels
               const agentStatusMap: Record<string, string> = {

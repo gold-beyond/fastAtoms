@@ -1,4 +1,5 @@
 venv/
+.venv/
 *.log
 node_modules/
 build/
@@ -9,3 +10,4 @@ vite.config.ts.timestamp-*
 *.db
 .trae/
 temp_doc.md
+.mgx/
