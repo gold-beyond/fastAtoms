@@ -228,6 +228,26 @@ setup_logging()
 include_routers_from_package(app, "routers")
 
 
+# ── Serve frontend static files in production ─────────────────────────
+# When FRONTEND_DIST is set (e.g. on Render), mount the built frontend so
+# the whole app runs from a single domain — no CORS, no separate hosting.
+# The mount must come AFTER API routes so API paths take priority.
+_FRONTEND_DIST = os.environ.get("FRONTEND_DIST", "")
+if _FRONTEND_DIST:
+    import logging as _log
+    from fastapi.staticfiles import StaticFiles
+
+    _dist_path = os.path.abspath(_FRONTEND_DIST)
+    if os.path.isdir(_dist_path) and os.path.isfile(os.path.join(_dist_path, "index.html")):
+        app.mount("/", StaticFiles(directory=_dist_path, html=True), name="frontend")
+        _log.getLogger(__name__).info("Mounted frontend static files from %s", _dist_path)
+    else:
+        _log.getLogger(__name__).warning(
+            "FRONTEND_DIST is set but directory not found or missing index.html: %s", _dist_path
+        )
+# ──────────────────────────────────────────────────────────────────────
+
+
 # Add exception handler for all exceptions except HTTPException
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
