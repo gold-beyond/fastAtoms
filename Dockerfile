@@ -1,5 +1,5 @@
 # ── Stage 1: Build frontend (Node.js - pnpm) ───────────────────────
-FROM node:20-alpine AS frontend-build
+FROM node:22-alpine AS frontend-build
 WORKDIR /app/frontend
 
 # Install pnpm via corepack (bundled with Node 20+)
