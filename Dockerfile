@@ -18,7 +18,8 @@ COPY . /src
 WORKDIR /src/app/backend
 
 RUN ls -la /src/app/backend/requirements.txt \
-    && pip install --no-cache-dir -r /src/app/backend/requirements.txt
+    && pip install --no-cache-dir -r /src/app/backend/requirements.txt \
+        -i https://mirrors.aliyun.com/pypi/simple --trusted-host mirrors.aliyun.com
 
 # Copy built frontend from stage 1
 COPY --from=frontend-build /app/frontend/dist /src/app/frontend/dist
