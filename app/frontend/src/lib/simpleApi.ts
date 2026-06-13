@@ -75,10 +75,13 @@ export const api = {
     const timeoutController = new AbortController();
     const timeoutId = setTimeout(() => timeoutController.abort(), STREAM_TIMEOUT_MS);
 
-    // Combine external signal with timeout
-    const combinedSignal = timeoutController.signal;
+    // Track whether this was a user-initiated abort vs timeout
+    let userAborted = false;
     if (signal) {
-      signal.addEventListener('abort', () => timeoutController.abort());
+      signal.addEventListener('abort', () => {
+        userAborted = true;
+        timeoutController.abort();
+      });
     }
 
     const cleanup = () => clearTimeout(timeoutId);
@@ -87,7 +90,7 @@ export const api = {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify(data),
-      signal: combinedSignal,
+      signal: timeoutController.signal,
     }).then(async (res) => {
       cleanup();
       if (!res.ok) {
@@ -133,16 +136,24 @@ export const api = {
         }
         onDone?.();
       } catch (err: any) {
-        if (err.name === 'AbortError' && onDone) {
-          onDone();
+        if (err.name === 'AbortError') {
+          if (userAborted) {
+            onDone?.();
+          } else {
+            dispatchError(onError, onEvent, '请求超时（超过5分钟），请重试');
+          }
         } else {
           dispatchError(onError, onEvent, err.message || 'Stream read error');
         }
       }
     }).catch((err: Error & { name?: string }) => {
       cleanup();
-      if (err.name === 'AbortError' && onDone) {
-        onDone();
+      if (err.name === 'AbortError') {
+        if (userAborted) {
+          onDone?.();
+        } else {
+          dispatchError(onError, onEvent, '请求超时（超过5分钟），请重试');
+        }
       } else {
         dispatchError(onError, onEvent, err.message || 'Request was aborted');
       }

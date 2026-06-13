@@ -40,7 +40,7 @@ export default function AgentMessageBubble({ agent, content, status, taskTitle, 
         <Avatar className="w-8 h-8 ring-2 ring-accent/20">
           <AvatarImage src={agent.avatarUrl} alt={agent.name} className="object-cover" />
           <AvatarFallback className={`bg-gradient-to-br ${agent.avatarColor} text-[10px] text-white font-bold`}>
-            {agent.name[0]}
+            {agent.name?.[0] || '?'}
           </AvatarFallback>
         </Avatar>
         <span className="text-[9px] text-muted-foreground">{agent.name}</span>

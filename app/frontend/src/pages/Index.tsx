@@ -72,7 +72,7 @@ interface AppContentProps {
 }
 
 function AppContent({ user, loading, logout, navigate, publishOpen, setPublishOpen }: AppContentProps) {
-  const { workMode } = useAgentContext();
+  const { workMode, resetAgentStatuses } = useAgentContext();
   const [chatCollapsed, setChatCollapsed] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(false);
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
@@ -178,14 +178,16 @@ function AppContent({ user, loading, logout, navigate, publishOpen, setPublishOp
     sessionStorage.setItem('atoms_current_conv', conv.id);
     setGeneratedFiles([]);
     setPreviewHtml('');
-  }, []);
+    resetAgentStatuses();
+  }, [resetAgentStatuses]);
 
   const handleNewConversation = useCallback(() => {
     setCurrentConvId(null);
     sessionStorage.removeItem('atoms_current_conv');
     setGeneratedFiles([]);
     setPreviewHtml('');
-  }, []);
+    resetAgentStatuses();
+  }, [resetAgentStatuses]);
 
   const handleConversationSaved = useCallback(
     (_id: string) => {

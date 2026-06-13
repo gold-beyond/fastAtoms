@@ -59,11 +59,11 @@ export function getConfig() {
   }
 
   // Then try Vite environment variables (for local development)
-  if (import.meta.env.VITE_API_BASE_URL) {
+  if (import.meta.env.VITE_API_BASE_URL !== undefined) {
     const viteConfig = {
-      API_BASE_URL: import.meta.env.VITE_API_BASE_URL,
+      API_BASE_URL: import.meta.env.VITE_API_BASE_URL || '',
     };
-    console.log('Using Vite environment config');
+    console.log('Using Vite environment config:', viteConfig);
     return viteConfig;
   }
 

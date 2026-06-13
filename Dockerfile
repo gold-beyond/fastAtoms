@@ -1,29 +1,29 @@
-# ── Stage 1: Build frontend (Node.js) ──────────────────────────────
+# ── Stage 1: Build frontend (Node.js - pnpm) ───────────────────────
 FROM node:20-alpine AS frontend-build
 WORKDIR /app/frontend
-COPY app/frontend/package.json app/frontend/package-lock.json ./
-RUN npm ci
+
+# Install pnpm via corepack (bundled with Node 20+)
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+COPY app/frontend/package.json app/frontend/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
 COPY app/frontend/ ./
-RUN npm run build
+RUN pnpm run build
 
 # ── Stage 2: Run backend + serve frontend (Python) ──────────────────
 FROM python:3.11-slim
-WORKDIR /app
 
-# Install backend dependencies
-COPY app/backend/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+# Copy EVERYTHING first, then work with it
+COPY . /src
+WORKDIR /src/app/backend
 
-# Copy backend code
-COPY app/backend /app/
+RUN ls -la /src/app/backend/requirements.txt \
+    && pip install --no-cache-dir -r /src/app/backend/requirements.txt
 
 # Copy built frontend from stage 1
-COPY --from=frontend-build /app/frontend/dist /app/frontend/dist
+COPY --from=frontend-build /app/frontend/dist /src/app/frontend/dist
 
-# Tell main.py where the frontend is
-ENV FRONTEND_DIST=/app/frontend/dist
-
-# Persistent SQLite data (Render recommends /var/data/)
+ENV FRONTEND_DIST=/src/app/frontend/dist
 ENV DATABASE_URL=sqlite:////var/data/fastatoms.db
 RUN mkdir -p /var/data
 

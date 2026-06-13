@@ -84,7 +84,7 @@ function getFileName(language: string): string {
 }
 
 function sanitizeDisplayContent(raw: string): string {
-  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
+  const codeBlockRegex = /```(\w*)\n?([\s\S]*?)```/g;
   const markerCount = (raw.match(/```/g) || []).length;
   let result = raw;
   if (markerCount % 2 === 1) {
@@ -100,7 +100,7 @@ function parseCodeBlocks(content: string): {
   displayContent: string;
   fullHtml: string;
 } {
-  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
+  const codeBlockRegex = /```(\w*)\n?([\s\S]*?)```/g;
   const files: GeneratedFile[] = [];
   let htmlCode = '';
   let cssCode = '';
@@ -254,6 +254,7 @@ export default function ChatPanel({
     baseMessages: Message[];
   } | null>(null);
   const requestConvIdRef = useRef<string | null>(null);
+  const streamConvIdRef = useRef<string | null>(null);  // actual buffer key (may differ from requestConvIdRef for team fallback)
   const agentsMapRef = useRef<Record<string, AgentDef>>({});
   const streamStateRef = useRef<TeamStreamState | null>(null);
   const streamBuffers = useRef<Record<string, {
@@ -277,13 +278,15 @@ export default function ChatPanel({
     if (ss && !ss.doneHandled) {
       ss.doneHandled = true;
     }
-    const scId = requestConvIdRef.current;
+    // Use streamConvIdRef for accurate buffer key (handles _team_ fallback)
+    const scId = streamConvIdRef.current || requestConvIdRef.current;
     if (scId && streamBuffers.current[scId]) {
       streamBuffers.current[scId].isTyping = false;
     }
     setIsTyping(false);
     pendingStreamRef.current = null;
     streamStateRef.current = null;
+    streamConvIdRef.current = null;
   };
 
   const abortGeneration = () => {
@@ -292,10 +295,44 @@ export default function ChatPanel({
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
+    // Capture stream state BEFORE cleanup (cleanupStream nulls streamStateRef)
+    const ss = streamStateRef.current;
+    // Save partial conversation state before cleanup
+    const scId = streamConvIdRef.current || requestConvIdRef.current;
+    if (scId && streamBuffers.current[scId]) {
+      const buf = streamBuffers.current[scId];
+      const stoppedMsgs = [...buf.messages];
+      // Mark the last streaming message as stopped
+      const lastMsg = stoppedMsgs[stoppedMsgs.length - 1];
+      if (lastMsg?.role === 'assistant' && !lastMsg.content) {
+        stoppedMsgs[stoppedMsgs.length - 1] = { ...lastMsg, content: '⏸️ 已停止生成' };
+      }
+      streamBuffers.current[scId].messages = stoppedMsgs;
+      streamBuffers.current[scId].isTyping = false;
+      saveConversation(stoppedMsgs, requestConvIdRef.current || undefined, true);
+    } else if (requestConvIdRef.current === currentConvIdRef.current) {
+      // Single-agent mode: save current messages with stop marker
+      setMessages((prev) => {
+        const updated = [...prev];
+        const lastMsg = updated[updated.length - 1];
+        if (lastMsg?.role === 'assistant') {
+          updated[updated.length - 1] = { ...lastMsg, content: lastMsg.content || '⏸️ 已停止生成' };
+        }
+        saveConversation(updated, undefined, true);
+        return updated;
+      });
+    }
     cleanupStream();
-    setAgentStatus('mike', 'completed');
-    setAgentStatus('alex', 'completed');
-    setAgentStatus('emma', 'completed');
+    // Use captured stream state to reset only active agents
+    if (ss && ss.completedAgents.size > 0) {
+      // Team mode: only complete agents not yet done
+      if (!ss.completedAgents.has('mike')) setAgentStatus('mike', 'completed');
+      if (!ss.completedAgents.has('alex')) setAgentStatus('alex', 'completed');
+      if (!ss.completedAgents.has('emma')) setAgentStatus('emma', 'completed');
+    } else {
+      // Single-agent mode
+      resetAgentStatuses();
+    }
   };
 
   useEffect(() => {
@@ -330,7 +367,17 @@ export default function ChatPanel({
 
     prevConvIdRef.current = currentConvId;
 
-    // Clean up stale team buffers when starting a new conversation
+    // Clean up stale buffers: remove entries for completed/non-streaming conversations
+    // Keep at most 10 buffer entries to prevent memory leaks over long sessions
+    const bufferKeys = Object.keys(streamBuffers.current);
+    if (bufferKeys.length > 10) {
+      // Remove oldest completed buffers first
+      const staleKeys = bufferKeys
+        .filter(k => !streamBuffers.current[k].isTyping && k !== currentConvId && !k.startsWith('_team_'))
+        .slice(0, bufferKeys.length - 10);
+      staleKeys.forEach(k => delete streamBuffers.current[k]);
+    }
+    // Remove completed _team_ buffers for conversations we're no longer viewing
     if (currentConvId === null) {
       Object.keys(streamBuffers.current).forEach(k => {
         if (k.startsWith('_team_')) {
@@ -464,6 +511,14 @@ export default function ChatPanel({
 
     return () => {
       abortController.abort();
+      // Abort active stream when user explicitly switches away from it
+      if (prevId && prevId !== currentConvId && requestConvIdRef.current === prevId) {
+        if (abortControllerRef.current) {
+          abortControllerRef.current.abort();
+          abortControllerRef.current = null;
+        }
+        abortRef.current = true;
+      }
     };
   }, [currentConvId, isLoggedIn]);
 
@@ -480,7 +535,7 @@ export default function ChatPanel({
       }));
       const messagesStr = JSON.stringify(saveMsgs);
       const title =
-        msgs.find((m) => m.role === 'user')?.content.slice(0, 50) || '新对话';
+        [...(msgs.find((m) => m.role === 'user')?.content || '新对话')].slice(0, 50).join('') || '新对话';
 
       const backupKey = targetConvId ? `atoms_backup_${targetConvId}` : 'atoms_backup_pending';
       try {
@@ -552,27 +607,17 @@ export default function ChatPanel({
   );
 
   const handleStop = () => {
+    // abortGeneration now handles both single-agent and team modes,
+    // including saving partial state and marking stopped messages
     abortGeneration();
-    if (requestConvIdRef.current === currentConvIdRef.current) {
-      setMessages((prev) => {
-        const updated = [...prev];
-        const lastMsg = updated[updated.length - 1];
-        if (lastMsg?.role === 'assistant') {
-          const content = lastMsg.content || '';
-          if (content.startsWith('⏳') || content.startsWith('⚠️')) {
-            updated[updated.length - 1] = {
-              ...lastMsg,
-              content: '⏸️ 已停止生成',
-            };
-          }
-        }
-        return updated;
-      });
-    }
   };
 
   const handleSend = async () => {
     if (!input.trim() || isTyping || pendingStreamRef.current) return;
+
+    // Reset stream tracking refs for the new request
+    streamConvIdRef.current = null;
+    requestConvIdRef.current = null;
 
     const effectiveAgentId = workMode === 'team' ? 'mike' : (activeAgentId || null);
 
@@ -628,6 +673,10 @@ export default function ChatPanel({
 
     const handleStreamToken = (token: string) => {
       accumulatedContent += token;
+      // Keep pendingStreamRef up-to-date so conversation switch can recover tokens
+      if (pendingStreamRef.current) {
+        pendingStreamRef.current.accumulatedContent = accumulatedContent;
+      }
       if (requestConvIdRef.current === currentConvIdRef.current) {
         setMessages((prev) => {
           const updated = [...prev];
@@ -641,28 +690,23 @@ export default function ChatPanel({
     };
 
     const handleStreamDone = (extra?: Record<string, any>) => {
+      const agentId = extra?.agent_id || effectiveAgentId || undefined;
+      finalAgentId = agentId;
+      const content = accumulatedContent || '未收到回复';
+      const display = processAIResponse(content);
+      const replyTimestamp = formatTimestamp();
+      const finalMessages: Message[] = [
+        ...updatedMessages,
+        { id: assistantId, role: 'assistant', content, displayContent: display, agentId, timestamp: replyTimestamp },
+      ];
       if (requestConvIdRef.current === currentConvIdRef.current) {
-        const agentId = extra?.agent_id || effectiveAgentId || undefined;
-        finalAgentId = agentId;
-        const content = accumulatedContent || '未收到回复';
-        const display = processAIResponse(content);
-        const replyTimestamp = formatTimestamp();
-        const finalMessages: Message[] = [
-          ...updatedMessages,
-          { id: assistantId, role: 'assistant', content, displayContent: display, agentId, timestamp: replyTimestamp },
-        ];
         setMessages(finalMessages);
         setIsTyping(false);
         saveConversation(finalMessages);
       } else {
-        const content = accumulatedContent || '未收到回复';
-        const replyTimestamp = formatTimestamp();
-        const finalMessages: Message[] = [
-          ...updatedMessages,
-          { id: assistantId, role: 'assistant', content, agentId: finalAgentId || effectiveAgentId || undefined, timestamp: replyTimestamp },
-        ];
         setIsTyping(false);
-        saveConversation(finalMessages, undefined, true);
+        // Use the convId we already assigned, not undefined (prevents duplicate creation)
+        saveConversation(finalMessages, requestConvIdRef.current || undefined, true);
       }
       pendingStreamRef.current = null;
     };
@@ -687,7 +731,7 @@ export default function ChatPanel({
         setMessages(errorMessages);
       }
       setIsTyping(false);
-      saveConversation(errorMessages, undefined, requestConvIdRef.current !== currentConvIdRef.current);
+      saveConversation(errorMessages, requestConvIdRef.current || undefined, requestConvIdRef.current !== currentConvIdRef.current);
       pendingStreamRef.current = null;
     };
 
@@ -711,6 +755,7 @@ export default function ChatPanel({
         setMessages((prev) => [...prev, { id: planMsgId, role: 'assistant', content: '', agentId: 'mike', timestamp: now }]);
 
         const streamConvId = effectiveConvId || `_team_${teamBaseId}`;
+        streamConvIdRef.current = streamConvId;  // track actual buffer key for cleanup
         streamBuffers.current[streamConvId] = {
           messages: [...updatedMessages, { id: planMsgId, role: 'assistant', content: '', agentId: 'mike', timestamp: now }],
           isTyping: true,
@@ -934,10 +979,26 @@ export default function ChatPanel({
               finishTeamStream(finalMsgs);
             },
             onError: (error: string) => {
+              const scId = streamConvIdRef.current || streamConvId;
+              const buf = scId ? streamBuffers.current[scId] : undefined;
+              const errMsg = {
+                id: `${teamBaseId}-err`,
+                role: 'assistant' as const,
+                content: `⚠️ ${error || '系统异常，请稍后重试。'}`,
+                agentId: 'mike',
+                timestamp: formatTimestamp(),
+              };
+              const errMessages = buf ? [...buf.messages, errMsg] : [...messagesRef.current, errMsg];
+              if (buf) {
+                buf.messages = errMessages;
+                buf.isTyping = false;
+                saveConversation(errMessages, requestConvIdRef.current || undefined, true);
+              }
+              if (currentConvIdRef.current === (requestConvIdRef.current || streamConvId)) {
+                setMessages(errMessages);
+              }
               cleanupStream();
-              setAgentStatus('mike', 'completed');
-              setAgentStatus('alex', 'completed');
-              setAgentStatus('emma', 'completed');
+              resetAgentStatuses();
             },
           },
           abortControllerRef.current?.signal,
@@ -1136,7 +1197,7 @@ export default function ChatPanel({
                     </div>
                   ) : (
                     <div className="prose prose-sm max-w-none prose-headings:text-foreground prose-p:text-foreground prose-strong:text-foreground prose-code:text-foreground">
-                      <Markdown>{sanitizeDisplayContent(msg.content)}</Markdown>
+                      <Markdown>{msg.displayContent || sanitizeDisplayContent(msg.content)}</Markdown>
                     </div>
                   )}
                 </div>
