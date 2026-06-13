@@ -228,11 +228,21 @@ setup_logging()
 include_routers_from_package(app, "routers")
 
 
-# ── Serve frontend static files in production ─────────────────────────
+# ── Root-level routes (must be BEFORE StaticFiles mount) ──────────────
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
+
+
+if not os.environ.get("FRONTEND_DIST", ""):
+    @app.get("/")
+    def root():
+        return {"message": "FastAPI Modular Template is running"}
 # When FRONTEND_DIST is set (e.g. on Render), mount the built frontend so
 # the whole app runs from a single domain — no CORS, no separate hosting.
 # The mount must come AFTER API routes so API paths take priority.
 _FRONTEND_DIST = os.environ.get("FRONTEND_DIST", "")
+_SERVE_FRONTEND = False
 if _FRONTEND_DIST:
     import logging as _log
     from fastapi.staticfiles import StaticFiles
@@ -241,6 +251,7 @@ if _FRONTEND_DIST:
     if os.path.isdir(_dist_path) and os.path.isfile(os.path.join(_dist_path, "index.html")):
         app.mount("/", StaticFiles(directory=_dist_path, html=True), name="frontend")
         _log.getLogger(__name__).info("Mounted frontend static files from %s", _dist_path)
+        _SERVE_FRONTEND = True
     else:
         _log.getLogger(__name__).warning(
             "FRONTEND_DIST is set but directory not found or missing index.html: %s", _dist_path
@@ -281,16 +292,6 @@ async def general_exception_handler(request: Request, exc: Exception):
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": "Internal Server Error"}
         )
-
-
-@app.get("/")
-def root():
-    return {"message": "FastAPI Modular Template is running"}
-
-
-@app.get("/health")
-def health_check():
-    return {"status": "healthy"}
 
 
 def run_in_debug_mode(app: FastAPI):

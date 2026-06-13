@@ -218,6 +218,37 @@ function formatTimestamp(): string {
   return `${month}-${day} ${hours}:${minutes}`;
 }
 
+/** Filter out transient error/loading messages before persisting to storage.
+ *  Error messages (⚠️) are ephemeral UI state — they should not survive page refresh. */
+function filterTransientForSave(msgs: Message[]): Message[] {
+  return msgs.filter((m) => {
+    if (m.role !== 'assistant') return true;
+    // Never persist error messages — they only make sense in the current session
+    if (m.content.startsWith('⚠️')) return false;
+    return true;
+  });
+}
+
+/** Clean up loaded messages so stale stream states don't confuse the user.
+ *  - Empty assistant content → show an "interrupted" notice
+ *  - Error messages that slipped through → remove them */
+function sanitizeLoadedMessages(msgs: Message[]): Message[] {
+  return msgs
+    .filter((m) => {
+      if (m.role !== 'assistant') return true;
+      // Strip any error messages that were persisted before the fix
+      if (m.content.startsWith('⚠️')) return false;
+      return true;
+    })
+    .map((m) => {
+      // Empty assistant messages with no content = interrupted stream
+      if (m.role === 'assistant' && !m.content) {
+        return { ...m, content: '⏸️ 对话已中断，你可以继续提问。' };
+      }
+      return m;
+    });
+}
+
 interface TeamStreamState {
   teamMessages: Record<string, string>;
   completedAgents: Set<string>;
@@ -264,6 +295,10 @@ export default function ChatPanel({
     completedAgents: string[];
     planMsgId: string;
   }>>({});
+
+  // Periodic stream progress save for resume-after-refresh support
+  const SAVE_DEBOUNCE_MS = 800;
+  const lastStreamSaveRef = useRef(0);
 
   useEffect(() => {
     const map: Record<string, AgentDef> = {};
@@ -344,11 +379,13 @@ export default function ChatPanel({
 
     if (prevId !== null && streamBuffers.current[prevId]) {
       const buf = streamBuffers.current[prevId];
-      buf.messages = messagesRef.current;
-      buf.isTyping = isTyping;
+      // Don't overwrite buffer messages with potentially stale React state.
+      // The buffer is already kept up-to-date by the token handlers regardless
+      // of whether the user is viewing this conversation.
+      // Don't overwrite isTyping either — the buffer state is authoritative.
       const ss = streamStateRef.current;
       buf.completedAgents = ss ? Array.from(ss.completedAgents) : [];
-      saveConversation(messagesRef.current, prevId, true);
+      saveConversation(buf.messages, prevId, true);
     }
     if (prevId && messagesRef.current.length > 0 && !streamBuffers.current[prevId]) {
       const msgs = [...messagesRef.current];
@@ -371,25 +408,28 @@ export default function ChatPanel({
     // Keep at most 10 buffer entries to prevent memory leaks over long sessions
     const bufferKeys = Object.keys(streamBuffers.current);
     if (bufferKeys.length > 10) {
-      // Remove oldest completed buffers first
+      // Remove oldest completed buffers first.
+      // Protect: active buffers (isTyping=true), current conversation, and temporary buffers
+      // (_team_ for team mode, _single_ for individual mode)
       const staleKeys = bufferKeys
-        .filter(k => !streamBuffers.current[k].isTyping && k !== currentConvId && !k.startsWith('_team_'))
+        .filter(k => !streamBuffers.current[k].isTyping && k !== currentConvId
+          && !k.startsWith('_team_') && !k.startsWith('_single_'))
         .slice(0, bufferKeys.length - 10);
       staleKeys.forEach(k => delete streamBuffers.current[k]);
     }
-    // Remove completed _team_ buffers for conversations we're no longer viewing
+    // Remove completed temp buffers for conversations we're no longer viewing
     if (currentConvId === null) {
       Object.keys(streamBuffers.current).forEach(k => {
-        if (k.startsWith('_team_')) {
+        if (k.startsWith('_team_') || k.startsWith('_single_')) {
           delete streamBuffers.current[k];
         }
       });
     }
 
     let buf = currentConvId ? streamBuffers.current[currentConvId] : undefined;
-    // Fallback: search for _team_ buffers (new conversations without an ID at start)
+    // Fallback: search for temporary buffers (new conversations without an ID at start)
     if (!buf && currentConvId) {
-      const fallbackKey = Object.keys(streamBuffers.current).find(k => k.startsWith('_team_'));
+      const fallbackKey = Object.keys(streamBuffers.current).find(k => k.startsWith('_team_') || k.startsWith('_single_'));
       if (fallbackKey) buf = streamBuffers.current[fallbackKey];
     }
     if (buf) {
@@ -450,45 +490,119 @@ export default function ChatPanel({
         const backup = localStorage.getItem(backupKey);
         if (backup) {
           const parsed = JSON.parse(backup);
-          const { messages: msgStr } = parsed;
+          const { messages: msgStr, streaming, lastUpdated, retryCount: bakRetryCount, workMode: backupWorkMode } = parsed;
           if (msgStr) {
-            const msgs = JSON.parse(msgStr);
-            if (!signal.aborted && Array.isArray(msgs) && msgs.length > 0) {
+            const rawMsgs = JSON.parse(msgStr);
+            if (!signal.aborted && Array.isArray(rawMsgs) && rawMsgs.length > 0) {
+              const msgs = sanitizeLoadedMessages(rawMsgs);
               setMessages(msgs);
               restoreCodeFromMessages(msgs);
+
+              // ── Auto-retry detection ──────────────────────────────
+              // Check if the last assistant message looks incomplete —
+              // empty content or a transient placeholder (⏸️ ⏳ 🔄).
+              // This catches interrupted streams regardless of whether
+              // the streaming flag was persisted correctly.
+              const lastMsg = msgs[msgs.length - 1];
+              const isIncomplete = lastMsg?.role === 'assistant' && (
+                !lastMsg.content ||
+                lastMsg.content.startsWith('⏸️') ||
+                lastMsg.content.startsWith('⏳') ||
+                lastMsg.content.startsWith('🔄')
+              );
+
+              if (isIncomplete) {
+                const mode = (backupWorkMode === 'team' || backupWorkMode === 'engineer')
+                  ? backupWorkMode as WorkMode : workMode;
+                const retryCnt = (bakRetryCount as number) || 0;
+                const MAX_RETRY = 3;
+                if (retryCnt < MAX_RETRY) {
+                  let lastUserIdx = -1;
+                  for (let i = msgs.length - 1; i >= 0; i--) {
+                    if (msgs[i].role === 'user') { lastUserIdx = i; break; }
+                  }
+                  const cleanMsgs = lastUserIdx >= 0 ? msgs.slice(0, lastUserIdx + 1) : msgs;
+                  doRecover(cleanMsgs, currentConvId!, mode, retryCnt + 1, parsed);
+                }
+              }
               return;
             }
           }
         }
       } catch { /* ignore corrupt backup */ }
 
-      if (!currentConvId) {
-        try {
-          const latest = localStorage.getItem('atoms_backup_latest');
-          if (latest) {
-            const parsed = JSON.parse(latest);
-            const { messages: msgStr } = parsed;
-            if (msgStr) {
-              const msgs = JSON.parse(msgStr);
-              if (!signal.aborted && Array.isArray(msgs) && msgs.length > 0) {
-                setMessages(msgs);
-                restoreCodeFromMessages(msgs);
-                return;
+      // Fallback: always try atoms_backup_latest.  This catches cases
+      // where the primary backup key doesn't match (e.g. conversation ID
+      // changed, or save raced with refresh).
+      try {
+        const latest = localStorage.getItem('atoms_backup_latest');
+        if (latest) {
+          const parsed = JSON.parse(latest);
+          const { messages: msgStr, streaming: fbStreaming, lastUpdated: fbUpdated, retryCount: fbRetry, workMode: fbMode } = parsed;
+          if (msgStr) {
+            const rawMsgs = JSON.parse(msgStr);
+            if (!signal.aborted && Array.isArray(rawMsgs) && rawMsgs.length > 0) {
+              const msgs = sanitizeLoadedMessages(rawMsgs);
+              setMessages(msgs);
+              restoreCodeFromMessages(msgs);
+
+              const lastMsg = msgs[msgs.length - 1];
+              const isIncomplete = lastMsg?.role === 'assistant' && (
+                !lastMsg.content ||
+                lastMsg.content.startsWith('⏸️') ||
+                lastMsg.content.startsWith('⏳') ||
+                lastMsg.content.startsWith('🔄')
+              );
+
+              if (isIncomplete) {
+                const mode = (fbMode === 'team' || fbMode === 'engineer')
+                  ? fbMode as WorkMode : workMode;
+                const retryCnt = (fbRetry as number) || 0;
+                const MAX_RETRY = 3;
+                if (retryCnt < MAX_RETRY) {
+                  let lastUserIdx = -1;
+                  for (let i = msgs.length - 1; i >= 0; i--) {
+                    if (msgs[i].role === 'user') { lastUserIdx = i; break; }
+                  }
+                  const cleanMsgs = lastUserIdx >= 0 ? msgs.slice(0, lastUserIdx + 1) : msgs;
+                  doRecover(cleanMsgs, (parsed.id as string) || currentConvId || 'recovery', mode, retryCnt + 1, parsed);
+                }
               }
+              return;
             }
           }
-        } catch { /* ignore */ }
-      }
+        }
+      } catch { /* ignore */ }
+
+      // Helper: trigger retry if the last assistant message is incomplete
+      const maybeRetry = (msgs: Message[], mode: WorkMode, convId: string, retryCnt: number, backup: Record<string, unknown>) => {
+        const lastM = msgs[msgs.length - 1];
+        const incomplete = lastM?.role === 'assistant' && (
+          !lastM.content ||
+          lastM.content.startsWith('⏸️') ||
+          lastM.content.startsWith('⏳') ||
+          lastM.content.startsWith('🔄')
+        );
+        if (!incomplete || retryCnt >= 3) return;
+        let lastUserIdx = -1;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].role === 'user') { lastUserIdx = i; break; }
+        }
+        const cleanMsgs = lastUserIdx >= 0 ? msgs.slice(0, lastUserIdx + 1) : msgs;
+        doRecover(cleanMsgs, convId, mode, retryCnt + 1, backup);
+      };
 
       if (isLoggedIn) {
         try {
           const data = await api.get<any>(`/api/v1/entities/conversations/${currentConvId}`);
           if (signal.aborted) return;
           if (data?.messages) {
-            const parsed = JSON.parse(data.messages as string);
+            const rawParsed = JSON.parse(data.messages as string);
             if (!signal.aborted) {
+              const parsed = sanitizeLoadedMessages(rawParsed);
               setMessages(parsed);
               restoreCodeFromMessages(parsed);
+              maybeRetry(parsed, workMode, currentConvId!, 0, {});
             }
           }
         } catch { /* fall back silently */ }
@@ -497,10 +611,12 @@ export default function ChatPanel({
         const conv = localConvs.find((c) => c.id === currentConvId);
         if (conv?.messages) {
           try {
-            const parsed = JSON.parse(conv.messages);
+            const rawParsed = JSON.parse(conv.messages);
             if (!signal.aborted) {
+              const parsed = sanitizeLoadedMessages(rawParsed);
               setMessages(parsed);
               restoreCodeFromMessages(parsed);
+              maybeRetry(parsed, workMode, currentConvId!, 0, {});
             }
           } catch { /* ignore */ }
         }
@@ -511,21 +627,16 @@ export default function ChatPanel({
 
     return () => {
       abortController.abort();
-      // Abort active stream when user explicitly switches away from it
-      if (prevId && prevId !== currentConvId && requestConvIdRef.current === prevId) {
-        if (abortControllerRef.current) {
-          abortControllerRef.current.abort();
-          abortControllerRef.current = null;
-        }
-        abortRef.current = true;
-      }
     };
   }, [currentConvId, isLoggedIn]);
 
   const saveConversation = useCallback(
     async (msgs: Message[], convIdOverride?: string, silent?: boolean): Promise<string | null> => {
       const targetConvId = convIdOverride ?? currentConvIdRef.current;
-      const saveMsgs = msgs.map((m) => ({
+      // Strip transient error/loading messages before persisting — they should
+      // not survive a page refresh and confuse the user on next load.
+      const cleanMsgs = filterTransientForSave(msgs);
+      const saveMsgs = cleanMsgs.map((m) => ({
         id: m.id,
         role: m.role,
         content: m.content,
@@ -591,6 +702,46 @@ export default function ChatPanel({
     [isLoggedIn, currentConvId, onConversationSaved, onCurrentConvIdChange]
   );
 
+  /** Lightweight localStorage-only save of stream progress.
+   *  Called periodically during streaming so that partial content survives
+   *  a page refresh and can be used for auto-retry.  Does NOT call the
+   *  backend API — that's saveConversation's job at stream boundaries. */
+  const saveStreamProgress = useCallback((convId: string) => {
+    if (!convId || abortRef.current) return;
+
+    const now = Date.now();
+    if (now - lastStreamSaveRef.current < SAVE_DEBOUNCE_MS) return;
+    lastStreamSaveRef.current = now;
+
+    const buf = streamBuffers.current[convId];
+    if (!buf || !buf.messages.length) return;
+
+    const cleanMsgs = filterTransientForSave(buf.messages);
+    const messagesStr = JSON.stringify(cleanMsgs);
+    const title =
+      [...(cleanMsgs.find((m) => m.role === 'user')?.content || '新对话')].slice(0, 50).join('') || '新对话';
+
+    const backupKey = `atoms_backup_${convId}`;
+    try {
+      // Read existing backup to preserve retryCount if present
+      let existing: Record<string, unknown> = {};
+      try { existing = JSON.parse(localStorage.getItem(backupKey) || '{}'); } catch { /* ignore */ }
+      const backupPayload = {
+        title,
+        messages: messagesStr,
+        id: convId,
+        streaming: true,
+        lastUpdated: now,
+        workMode: (existing.workMode as string) || workMode,
+        retryCount: (existing.retryCount as number) || 0,
+      };
+      localStorage.setItem(backupKey, JSON.stringify(backupPayload));
+      // Also write to fallback keys so loadConversation can recover even
+      // when the conversation-id-based key is missing or mismatched.
+      try { localStorage.setItem('atoms_backup_latest', JSON.stringify(backupPayload)); } catch { /* ignore */ }
+    } catch { /* storage full — silently ignore */ }
+  }, [workMode]);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -612,8 +763,106 @@ export default function ChatPanel({
     abortGeneration();
   };
 
+  /** Direct recovery: called inline from loadConversation when an
+   *  interrupted stream is detected.  No state triggers, no effects —
+   *  just sets up state, calls the API, and streams the result. */
+  const doRecover = (cleanMsgs: Message[], convId: string, mode: WorkMode, attemptCount: number, backupData: Record<string, unknown>) => {
+    try {
+      const backupKey = `atoms_backup_${convId}`;
+      localStorage.setItem(backupKey, JSON.stringify({ ...backupData, streaming: false }));
+    } catch { /* ignore */ }
+
+    const resumeAssistantId = `resume-${Date.now()}`;
+    const now = formatTimestamp();
+    const effectiveAgentId = mode === 'team' ? 'mike' : (activeAgentId || 'alex');
+
+    abortRef.current = false;
+    abortControllerRef.current = new AbortController();
+    pendingStreamRef.current = { convId, assistantId: resumeAssistantId, accumulatedContent: '', baseMessages: cleanMsgs };
+    streamConvIdRef.current = convId;
+    requestConvIdRef.current = convId;
+
+    const placeholder: Message = { id: resumeAssistantId, role: 'assistant' as const, content: '⏸️ 对话已中断，正在恢复...', timestamp: now, agentId: effectiveAgentId };
+    setMessages([...cleanMsgs, placeholder]);
+    setIsTyping(true);
+    streamBuffers.current[convId] = { messages: [...cleanMsgs, placeholder], isTyping: true, timestamp: now, completedAgents: [], planMsgId: resumeAssistantId };
+
+    let accumulatedContent = '';
+
+    const onToken = (token: string) => {
+      accumulatedContent += token;
+      if (pendingStreamRef.current) pendingStreamRef.current.accumulatedContent = accumulatedContent;
+      setMessages((prev) => { const u = [...prev]; const idx = u.findIndex(m => m.id === resumeAssistantId); if (idx >= 0) u[idx] = { ...u[idx], content: accumulatedContent }; return u; });
+      const buf = streamBuffers.current[convId]; if (buf) { const idx = buf.messages.findIndex(m => m.id === resumeAssistantId); if (idx >= 0) buf.messages[idx] = { ...buf.messages[idx], content: accumulatedContent }; }
+      saveStreamProgress(convId);
+    };
+
+    const onDone = (extra?: Record<string, any>) => {
+      const content = accumulatedContent || '未收到回复';
+      const display = processAIResponse(content);
+      const final: Message[] = [...cleanMsgs, { id: resumeAssistantId, role: 'assistant' as const, content, displayContent: display, agentId: extra?.agent_id || effectiveAgentId, timestamp: formatTimestamp() }];
+      const buf = streamBuffers.current[convId]; if (buf) { buf.messages = final; buf.isTyping = false; }
+      setMessages(final); setIsTyping(false);
+      saveConversation(final, convId, false);
+      pendingStreamRef.current = null;
+    };
+
+    const onErr = (error: string) => {
+      if (abortRef.current) { pendingStreamRef.current = null; return; }
+      const errMsgs: Message[] = [...cleanMsgs, { id: resumeAssistantId, role: 'assistant' as const, content: `⚠️ ${error}`, agentId: effectiveAgentId, timestamp: formatTimestamp() }];
+      const buf = streamBuffers.current[convId]; if (buf) { buf.messages = errMsgs; buf.isTyping = false; }
+      setMessages(errMsgs); setIsTyping(false);
+      saveConversation(errMsgs, convId, true);
+      pendingStreamRef.current = null;
+    };
+
+    const apiMessages = [{ role: 'system' as const, content: SYSTEM_PROMPT }, ...cleanMsgs.map(m => ({ role: m.role as 'user'|'assistant', content: m.content }))];
+
+    (async () => {
+      try {
+        if (mode === 'team') {
+          const labels: Record<string,string> = { alex: '👨‍💻 Alex(工程师)', emma: '📋 Emma(产品)' };
+          await api.postStream('/api/v1/agents/team/chat/stream', { messages: apiMessages.slice(1) }, {
+            onEvent: (ev: Record<string,any>) => {
+              if (abortRef.current) return;
+              switch (ev.type) {
+                case 'token': onToken(ev.token || ''); break;
+                case 'plan': { const tf = (ev.tasks || []).map((t: any,i: number) => `${i+1}. ${labels[t.agent_id]||t.agent_id} — ${t.title}`).join('\n'); onToken(`\n\n---\n\n📋 **执行计划**\n\n${tf}`); break; }
+                case 'task_start': case 'task_complete': case 'phase': break;
+                case 'need_clarify': onErr('需要更多信息才能继续，请补充你的需求描述。'); break;
+                case 'error': onErr(ev.error || '系统异常'); break;
+              }
+            },
+            onDone: () => onDone(),
+            onError: (e: string) => onErr(e),
+          }, abortControllerRef.current?.signal);
+        } else {
+          await api.postStream('/api/v1/agents/chat/stream', { agent_id: effectiveAgentId, messages: apiMessages }, {
+            onToken: (t: string) => { if (!abortRef.current) onToken(t); },
+            onDone: (extra?: Record<string,any>) => onDone(extra || { agent_id: effectiveAgentId }),
+            onError: (e: string) => onErr(e),
+          }, abortControllerRef.current?.signal);
+        }
+      } catch (e: unknown) {
+        if (!abortRef.current) onErr('系统异常，请稍后重试。');
+        cleanupStream();
+      } finally {
+        abortControllerRef.current = null;
+      }
+    })();
+  };
+
   const handleSend = async () => {
-    if (!input.trim() || isTyping || pendingStreamRef.current) return;
+    if (!input.trim()) return;
+
+    // If there's an active stream for the CURRENT conversation, block sending
+    if (isTyping && pendingStreamRef.current?.convId === currentConvId) return;
+
+    // If there's a background stream for a DIFFERENT conversation, abort it first
+    // so we can start a new stream for this conversation
+    if (pendingStreamRef.current && pendingStreamRef.current.convId !== currentConvId) {
+      abortGeneration();
+    }
 
     // Reset stream tracking refs for the new request
     streamConvIdRef.current = null;
@@ -664,6 +913,19 @@ export default function ChatPanel({
         ...prev,
         { id: assistantId, role: 'assistant', content: '', timestamp: now, agentId: effectiveAgentId || undefined },
       ]);
+      // Create stream buffer for background streaming support (consistent with team mode)
+      const singleConvId = effectiveConvId || `_single_${assistantId}`;
+      streamConvIdRef.current = singleConvId;
+      streamBuffers.current[singleConvId] = {
+        messages: [...updatedMessages, { id: assistantId, role: 'assistant', content: '', timestamp: now, agentId: effectiveAgentId || undefined }],
+        isTyping: true,
+        timestamp: now,
+        completedAgents: [],
+        planMsgId: assistantId,
+      };
+      // Immediately persist with streaming=true so a refresh during "thinking"
+      // (before any token arrives) still triggers auto-retry
+      saveStreamProgress(singleConvId);
     }
 
     if (abortRef.current) return;
@@ -686,7 +948,20 @@ export default function ChatPanel({
           }
           return updated;
         });
+      } else {
+        // Background streaming: keep streamBuffers up-to-date so switching back recovers all tokens
+        const scId = streamConvIdRef.current || requestConvIdRef.current;
+        if (scId && streamBuffers.current[scId]) {
+          const buf = streamBuffers.current[scId];
+          const idx = buf.messages.findIndex((m: any) => m.id === assistantId);
+          if (idx >= 0) {
+            buf.messages[idx] = { ...buf.messages[idx], content: accumulatedContent };
+          }
+        }
       }
+      // Periodic save for resume-after-refresh support
+      const scId = streamConvIdRef.current || requestConvIdRef.current;
+      if (scId) saveStreamProgress(scId);
     };
 
     const handleStreamDone = (extra?: Record<string, any>) => {
@@ -699,6 +974,12 @@ export default function ChatPanel({
         ...updatedMessages,
         { id: assistantId, role: 'assistant', content, displayContent: display, agentId, timestamp: replyTimestamp },
       ];
+      // Update stream buffer so conversation switch recovery picks up the completed state
+      const scId = streamConvIdRef.current || requestConvIdRef.current;
+      if (scId && streamBuffers.current[scId]) {
+        streamBuffers.current[scId].messages = finalMessages;
+        streamBuffers.current[scId].isTyping = false;
+      }
       if (requestConvIdRef.current === currentConvIdRef.current) {
         setMessages(finalMessages);
         setIsTyping(false);
@@ -727,6 +1008,12 @@ export default function ChatPanel({
           timestamp: errorTimestamp,
         },
       ];
+      // Update stream buffer so conversation switch recovery picks up the error state
+      const scId = streamConvIdRef.current || requestConvIdRef.current;
+      if (scId && streamBuffers.current[scId]) {
+        streamBuffers.current[scId].messages = errorMessages;
+        streamBuffers.current[scId].isTyping = false;
+      }
       if (requestConvIdRef.current === currentConvIdRef.current) {
         setMessages(errorMessages);
       }
@@ -763,6 +1050,9 @@ export default function ChatPanel({
           completedAgents: [],
           planMsgId,
         };
+        // Immediately persist with streaming=true so a refresh during "thinking"
+        // (before any token arrives) still triggers auto-retry
+        saveStreamProgress(streamConvId);
 
         const finishTeamStream = (finalMsgs?: Message[]) => {
           if (streamState.doneHandled) return;
@@ -827,6 +1117,8 @@ export default function ChatPanel({
                       if (idx >= 0) buf.messages[idx] = { ...buf.messages[idx], content: teamMessages[key] };
                     }
                   }
+                  // Periodic save for resume-after-refresh support
+                  saveStreamProgress(streamConvId);
                   break;
                 }
                 case 'plan': {
@@ -866,6 +1158,8 @@ export default function ChatPanel({
                       buf.messages[idx] = { ...buf.messages[idx], content: planContent, timestamp: formatTimestamp() };
                     }
                   }
+                  // Periodic save for resume-after-refresh support
+                  saveStreamProgress(streamConvId);
                   break;
                 }
                 case 'task_start': {
@@ -889,6 +1183,8 @@ export default function ChatPanel({
                     const buf = streamBuffers.current[streamConvId];
                     if (!buf.messages.some((m: any) => m.id === msgId)) buf.messages.push(newMsg);
                   }
+                  // Periodic save for resume-after-refresh support
+                  saveStreamProgress(streamConvId);
                   break;
                 }
                 case 'task_complete': {
@@ -1031,6 +1327,11 @@ export default function ChatPanel({
           ...updatedMessages,
           { id: assistantId, role: 'assistant', content: `⚠️ ${errorDetail}`, agentId: effectiveAgentId || undefined, timestamp: errorTimestamp },
         ];
+        const scId = streamConvIdRef.current || requestConvIdRef.current;
+        if (scId && streamBuffers.current[scId]) {
+          streamBuffers.current[scId].messages = errorMessages;
+          streamBuffers.current[scId].isTyping = false;
+        }
         if (requestConvIdRef.current === currentConvIdRef.current) {
           setMessages(errorMessages);
         }
@@ -1054,6 +1355,8 @@ export default function ChatPanel({
 
   const isStreamingToCurrentConv =
     isTyping && requestConvIdRef.current === currentConvId;
+  const isStreamingForOtherConv =
+    isTyping && !!requestConvIdRef.current && requestConvIdRef.current !== currentConvId;
 
   const handleModeChange = (mode: WorkMode) => {
     setWorkMode(mode);
@@ -1219,12 +1522,18 @@ export default function ChatPanel({
       </ScrollArea>
 
       <div className="p-3 border-t border-border">
+        {isStreamingForOtherConv && (
+          <div className="text-xs text-amber-500 mb-2 flex items-center gap-1.5">
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+            其他对话正在生成中，发送消息将停止该生成
+          </div>
+        )}
         <div className="flex gap-2">
           <Input
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="输入你的需求..."
+            placeholder={isStreamingForOtherConv ? '发送消息将停止其他对话的生成...' : '输入你的需求...'}
             className="bg-muted border-border text-foreground placeholder:text-muted-foreground focus-visible:ring-primary/50"
           />
           <Button

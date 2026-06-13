@@ -130,9 +130,14 @@ class DatabaseManager:
                     or os.environ.get("IS_LAMBDA", "").lower() in ("true", "1", "yes")
                 )
 
+                is_sqlite = database_url.startswith("sqlite")
+
                 if is_lambda:
                     engine_kwargs["poolclass"] = NullPool
                     logger.info("Using NullPool for Lambda environment to avoid connection state conflicts")
+                elif is_sqlite:
+                    engine_kwargs["poolclass"] = NullPool
+                    logger.info("Using NullPool for SQLite to avoid pool argument conflicts")
                 else:
                     engine_kwargs["pool_pre_ping"] = True
                     engine_kwargs["pool_size"] = 10
