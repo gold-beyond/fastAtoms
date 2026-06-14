@@ -24,7 +24,7 @@ const App = () => (
     {/* MODULE_PROVIDERS_END */}
     <TooltipProvider>
       <Toaster />
-      <BrowserRouter>
+      <BrowserRouter basename="/fastAtoms">
         <AppRoutes />
       </BrowserRouter>
     </TooltipProvider>
